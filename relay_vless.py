@@ -18,8 +18,18 @@ from main import (
     save_state,
     log_activity,
     now_ir,
+    resolve_link_uuid,
+    with_outbound,
 )
 from speed_limit import throttle
+
+# اتصال به مقصد: اگر کانفیگ پراکسی خروجی داشته باشد از همان رد می‌شود، وگرنه مستقیم.
+# اگر ماژول outbound_proxy در دسترس نباشد، رفتار قبلی (اتصال مستقیم) حفظ می‌شود.
+try:
+    from outbound_proxy import open_target_connection
+except Exception:  # pragma: no cover
+    async def open_target_connection(link, address, port, timeout: float = 10.0):
+        return await asyncio.wait_for(asyncio.open_connection(address, port), timeout=timeout)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # VLESS Relay — بهینه‌شده برای حداکثر throughput
@@ -122,6 +132,8 @@ async def relay_tcp_to_ws(ws: WebSocket, reader: asyncio.StreamReader, conn_id: 
 async def websocket_tunnel(ws: WebSocket, uuid: str):
     await ws.accept()
 
+    # چندخروجی: UUID مجازی هر لوکیشن → UUID اصلی + خروجی همان لوکیشن
+    uuid, ob_override = resolve_link_uuid(uuid)
     async with LINKS_LOCK:
         link = LINKS.get(uuid)
 
@@ -168,10 +180,7 @@ async def websocket_tunnel(ws: WebSocket, uuid: str):
         connections[conn_id]["bytes"] += len(first_chunk)
         logger.info(f"➡️  [{conn_id}] → {address}:{port}")
 
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(address, port),
-            timeout=10.0
-        )
+        reader, writer = await open_target_connection(with_outbound(link, ob_override), address, port, timeout=10.0)
         sock = writer.transport.get_extra_info('socket')
         if sock:
             import socket

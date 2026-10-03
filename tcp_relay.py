@@ -101,8 +101,14 @@ async def _handle_client(reader, writer):
     from main import (
         LINKS, LINKS_LOCK, stats, hourly_traffic, connections, error_logs,
         is_link_allowed, is_ip_allowed, save_state, log_activity, now_ir,
+        resolve_link_uuid, with_outbound,
     )
     from speed_limit import throttle
+    try:
+        from outbound_proxy import open_target_connection
+    except Exception:  # ماژول پراکسی خروجی در دسترس نیست → اتصال مستقیم
+        async def open_target_connection(link, address, port, timeout: float = 10.0):
+            return await asyncio.wait_for(asyncio.open_connection(address, port), timeout=timeout)
 
     async def check_and_use(uid: str, n: int) -> bool:
         async with LINKS_LOCK:
@@ -127,6 +133,7 @@ async def _handle_client(reader, writer):
             return
 
         uid, command, address, port, payload = await _parse_vless_tcp_header(first_chunk)
+        uid, ob_override = resolve_link_uuid(uid)
 
         async with LINKS_LOCK:
             link = LINKS.get(uid)
@@ -151,9 +158,7 @@ async def _handle_client(reader, writer):
         stats["total_requests"] += 1
         connections[conn_id]["bytes"] += len(first_chunk)
 
-        target_reader, target_writer = await asyncio.wait_for(
-            asyncio.open_connection(address, port), timeout=10.0
-        )
+        target_reader, target_writer = await open_target_connection(with_outbound(link, ob_override), address, port, timeout=10.0)
         sock = target_writer.transport.get_extra_info("socket")
         if sock:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)

@@ -812,6 +812,7 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(59,130,246,.10),tra
       <div class="tab" data-pg="clientmgr"><i class="ti ti-user-plus"></i><span data-i18n="nav_clientmgr">ساخت کلاینت</span></div>
       <div class="tab" data-pg="categories"><i class="ti ti-category"></i><span data-i18n="nav_categories">دسته‌بندی‌ها</span></div>
       <div class="tab" data-pg="subgroups"><i class="ti ti-folders"></i><span data-i18n="nav_subgroups">گروه‌های ساب</span><span class="bd" id="nb-subs">0</span></div>
+      <div class="tab" data-pg="nodes"><i class="ti ti-server-cog"></i><span data-i18n="nav_nodes">نودها (چند لوکیشن)</span></div>
       <div class="tab" data-pg="plans"><i class="ti ti-shopping-bag"></i><span data-i18n="nav_plans">پلن‌های فروش</span></div>
       <div class="tab" data-pg="reports"><i class="ti ti-chart-histogram"></i><span data-i18n="nav_reports">گزارش‌ها</span></div>
       <div class="tab" data-pg="admins"><i class="ti ti-users-group"></i><span data-i18n="nav_admins">ادمین‌ها</span></div>
@@ -833,11 +834,13 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(59,130,246,.10),tra
     <button class="hamburger" onclick="toggleSidebar()"><i class="ti ti-menu-2"></i></button>
     <div class="page-title"><span id="pageTitleMain" data-i18n="nav_overview">داشبورد</span><span id="pageTitleSub" data-i18n="pt_overview">وضعیت لحظه‌ای سرویس، کانفیگ‌ها و ربات فروش</span></div>
     <div class="top-right">
+      <button class="nd-switch" id="nodeSwitchBtn" style="display:none" onclick="openNodeSwitcher()" title="انتخاب پنل/نود برای مدیریت"></button>
       <button class="icon-btn" id="themeToggle" onclick="toggleTheme()" title="تغییر پوسته"><i class="ti ti-moon"></i></button>
       <a class="icon-btn" href="/logout" title="خروج"><i class="ti ti-logout"></i></a>
     </div>
   </div>
 
+  <div class="nd-banner" id="nodeBanner" style="display:none"></div>
   <div class="body-wrap">
 
     <!-- OVERVIEW -->
@@ -871,7 +874,8 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(59,130,246,.10),tra
           <select class="sel" id="linkFilterCat" onchange="renderLinks()"><option value="">همه دسته‌ها</option></select>
           <span id="ibUpdatedAt" style="font-size:9px;color:var(--sub2);align-self:center;white-space:nowrap">—</span>
           <button class="btn" id="ibRefreshBtn" onclick="refreshAllInbounds()"><i class="ti ti-refresh" id="ibRefreshIcon"></i>بروزرسانی همه</button>
-          <button class="btn" onclick="openAutoLink()"><i class="ti ti-bolt"></i>ساخت سریع</button>
+          <button class="btn" onclick="openOutboundManager()" title="مدیریت پراکسی‌های خروجی (SOCKS5 / SOCKS4 / HTTP)"><i class="ti ti-route"></i>اوتباند</button>
+          <button class="btn" onclick="openAutoLink()"><i class="ti ti-wand"></i>ساخت هوشمند</button>
           <button class="btn primary btn-inbound" onclick="openLinkDrawer()"><i class="ti ti-plus"></i>اینباند جدید</button>
         </div>
       </div>
@@ -883,6 +887,7 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(59,130,246,.10),tra
       <div class="ib-bulkbar" id="ibBulkBar" style="display:none">
         <span><b id="ibSelCount">0</b> مورد انتخاب شده</span>
         <div class="ib-bulkactions">
+          <button class="btn sm" onclick="bulkOutbound()"><i class="ti ti-route"></i>خروجی (Outbound)</button>
           <button class="btn sm" onclick="bulkToggleLinks(true)"><i class="ti ti-power"></i>فعال‌سازی</button>
           <button class="btn sm" onclick="bulkToggleLinks(false)"><i class="ti ti-power"></i>غیرفعال‌سازی</button>
           <button class="btn sm" style="color:var(--bad)" onclick="bulkDeleteLinks()"><i class="ti ti-trash"></i>حذف</button>
@@ -919,7 +924,16 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(59,130,246,.10),tra
       <div class="pg-head"><div><h1>گروه‌های ساب</h1><p>ترکیب چند کانفیگ در یک لینک اشتراک واحد</p></div>
         <div class="toolbar"><button class="btn primary" onclick="openSubGroupDrawer()"><i class="ti ti-plus"></i>گروه جدید</button></div>
       </div>
-      <div class="card"><table><thead><tr><th>نام گروه</th><th>تعداد کانفیگ</th><th>لینک عمومی</th><th></th></tr></thead><tbody id="subsBody"></tbody></table></div>
+      <div class="card"><table><thead><tr><th>نام گروه</th><th>تعداد کانفیگ (این پنل + نودها)</th><th>لینک عمومی</th><th></th></tr></thead><tbody id="subsBody"></tbody></table></div>
+    </div>
+
+    <!-- NODES -->
+    <div class="page" id="pg-nodes">
+      <div class="pg-head"><div><div class="eyebrow"><span class="live-dot"></span> FAULTPASS · NODES</div><h1>نودها</h1><p>چند پنل FaultPass را به هم وصل کن (هر کدام در یک لوکیشن) و همه را از یک پنل مدیریت کن.</p></div>
+        <div class="toolbar"><button class="btn" onclick="checkAllNodes()"><i class="ti ti-refresh"></i>بررسی همه</button><button class="btn primary" onclick="openNodeDrawer()"><i class="ti ti-plus"></i>افزودن نود</button></div>
+      </div>
+      <div class="card" style="margin-bottom:14px"><div class="panel-head"><div><b><i class="ti ti-key"></i> توکن این پنل (وقتی این پنل «نود» است)</b><small>توکن را کپی کن و در پنل اصلی، بخش نودها، بچسبان</small></div></div><div style="padding:0 18px 18px" id="nodeTokenBody"></div></div>
+      <div class="card"><div class="panel-head"><div><b>نودهای متصل به این پنل</b><small>وضعیت هر ۳۰ ثانیه به‌روز می‌شود · «مدیریت» کل پنل را روی همان نود اجرا می‌کند</small></div></div><div style="padding:0 18px 18px" id="nodesList"></div></div>
     </div>
 
     <!-- PLANS -->
@@ -1046,6 +1060,14 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(59,130,246,.10),tra
         <button class="btn primary" style="margin-top:14px" onclick="saveSubTemplate()"><i class="ti ti-device-floppy"></i>ذخیره الگوی ساب</button>
       </div>
 
+      <div class="card settings-card" style="margin-top:14px">
+        <div class="section-title">استایل نام کانفیگ‌ها</div>
+        <p class="hint" style="margin-bottom:12px">با روشن بودن این گزینه، اسم ساده مثل FaultPass به‌صورت FaultPass | Aurora 🌠 (اسم و ایموجی خفن) ساخته می‌شود؛ هم در ساخت دستی و هم در «ساخت سریع/هوشمند». اسمی که خودت تزئین کرده باشی (با | یا ایموجی) دست‌نخورده می‌ماند.</p>
+        <label class="tpl-row"><div class="tpl-row-main"><i class="ti ti-sparkles"></i><div><b>استایل خودکار نام کانفیگ‌ها</b><small>دستی و خودکار</small></div></div><input type="checkbox" class="tpl-switch" id="nameStyleEnabled" onchange="updateBrandPreview()"></label>
+        <div class="tpl-preview" style="margin-top:10px"><div class="tpl-preview-label"><i class="ti ti-device-mobile"></i> پیش‌نمایش در اپ کاربر</div>
+          <div class="tpl-preview-row"><span class="tpl-preview-dot"></span><div class="tpl-preview-text" id="brandNamePreview">FaultPass | Aurora 🌠</div><span class="tpl-preview-proto">VLESS</span></div></div>
+        <button class="btn primary" style="margin-top:14px" onclick="saveNameStyle()"><i class="ti ti-device-floppy"></i>ذخیره استایل نام</button>
+      </div>
       <div class="card settings-card" style="margin-top:14px"><div class="section-title">فروشگاه (پرداخت با ⭐️ استارز تلگرام)</div><p class="hint">وقتی روشنه، هر کاربری با زدن /start روی ربات، پلن‌های تعریف‌شده در «پلن‌های فروش» رو می‌بینه و می‌تونه بخره؛ فوراً هم اثر می‌کنه، نیازی به ری‌استارت نیست.</p><label class="chk"><input type="checkbox" id="setSalesEnabled" onchange="saveSalesToggle()"> فروشگاه فعال باشد</label></div>
       <div class="card settings-card" style="margin-top:14px"><div class="section-title">Bot Text Studio</div><p class="hint">تمام پیام‌های کلیدی ربات را از همین پنل ویرایش کن؛ تغییرات روی ربات در اجرای بعدی/ری‌استارت اعمال می‌شوند.</p><div class="bot-text-grid"><div class="grp"><label>پیام خوش‌آمد</label><textarea id="botTxtWelcome" rows="4"></textarea></div><div class="grp"><label>منوی مدیریت</label><textarea id="botTxtAdmin" rows="4"></textarea></div><div class="grp"><label>پیام ساخت کانفیگ</label><textarea id="botTxtCreated" rows="3"></textarea></div><div class="grp"><label>پیام فروشگاه</label><textarea id="botTxtStore" rows="3"></textarea></div><div class="grp"><label>پیام پرداخت موفق</label><textarea id="botTxtPayment" rows="3"></textarea></div></div><button class="btn primary" onclick="saveBotTexts()"><i class="ti ti-device-floppy"></i>ذخیره متن‌های ربات</button></div>
 
@@ -1078,8 +1100,16 @@ function toast(msg, ok=true){
   $('toastWrap').appendChild(t);
   setTimeout(()=>t.remove(), 3800);
 }
+// وقتی یک «نود» برای مدیریت انتخاب شده، APIهای عملیاتی از طریق پنل اصلی روی نود اجرا می‌شن.
+const ACTIVE_NODE = (()=>{ try{ return JSON.parse(sessionStorage.getItem('fp_active_node')||'null'); }catch(e){ return null; } })();
+const NODE_FWD_PREFIXES = ['/api/links','/api/proxies','/api/subs','/api/categories','/api/protocols','/api/reality-keypair','/api/connections','/api/telemetry','/api/system','/api/network','/api/reports','/api/activity','/api/errors','/stats'];
+function nodeRewrite(path){
+  if(!ACTIVE_NODE) return path;
+  const p = String(path).split('?')[0].replace(/\/+$/,'');
+  return NODE_FWD_PREFIXES.some(x=>p===x || p.startsWith(x+'/')) ? `/api/nodes/${ACTIVE_NODE.id}/fwd${path}` : path;
+}
 async function api(path, opts={}){
-  const res = await fetch(path, {credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...opts});
+  const res = await fetch(nodeRewrite(path), {credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...opts});
   let data = {};
   try{ data = await res.json(); }catch(e){}
   if(!res.ok){
@@ -1122,7 +1152,7 @@ function gotoPage(pg){
   CURRENT_PAGE = pg;
   updatePageTitle(pg);
   document.getElementById('app').classList.remove('sb-open');
-  const loaders = {overview:refreshOverview, links:loadLinks, clientmgr:loadClientManager, categories:loadCategories, subgroups:loadSubGroups,
+  const loaders = {overview:refreshOverview, links:loadLinks, clientmgr:loadClientManager, categories:loadCategories, subgroups:loadSubGroups, nodes:loadNodesPage,
     plans:loadPlans, reports:loadReports, admins:()=>{loadAdmins();loadAdminRequests();}, activity:loadActivity, messages:loadMessages, settings:()=>{loadSettings();loadDiagnostics();}};
   if(loaders[pg]) loaders[pg]();
 }
@@ -1146,7 +1176,7 @@ function closeDrawer(){
 // Appearance Studio
 // ============================================================
 const APPEARANCE_DEFAULTS={font:'Vazirmatn',theme:'dark',accent:'purple',density:'comfortable',motion:true,wide:false,radius:'soft',glow:true,fontSize:'normal'};
-const ACCENTS={purple:['#3b82f6','#6d28d9'],blue:['#3b82f6','#1d4ed8'],cyan:['#06b6d4','#0e7490'],green:['#10b981','#047857'],orange:['#f59e0b','#b45309'],pink:['#ec4899','#be185d'],red:['#ef4444','#b91c1c'],indigo:['#2563eb','#4338ca'],teal:['#14b8a6','#0f766e'],gold:['#eab308','#a16207']};
+const ACCENTS={purple:['#7F56D9','#6941C6'],blue:['#3b82f6','#1d4ed8'],cyan:['#06b6d4','#0e7490'],green:['#10b981','#047857'],orange:['#f59e0b','#b45309'],pink:['#ec4899','#be185d'],red:['#ef4444','#b91c1c'],indigo:['#2563eb','#4338ca'],teal:['#14b8a6','#0f766e'],gold:['#eab308','#a16207']};
 function getAppearance(){try{return {...APPEARANCE_DEFAULTS,...JSON.parse(localStorage.getItem('vw_appearance')||'{}')}}catch(e){return {...APPEARANCE_DEFAULTS}}}
 function saveAppearance(a){try{localStorage.setItem('vw_appearance',JSON.stringify(a))}catch(e){} applyAppearance()}
 function applyAppearance(){const a=getAppearance();const root=document.documentElement;root.style.setProperty('--font-ui',`'${a.font}',sans-serif`);const theme=a.theme==='system'?(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark'):a.theme;root.setAttribute('data-theme',theme);const c=ACCENTS[a.accent]||ACCENTS.purple;root.style.setProperty('--accent',c[0]);root.style.setProperty('--accent-d',c[1]);root.style.setProperty('--ui-glow',a.glow?`0 14px 40px -18px ${c[0]}88`:'none');document.body.classList.toggle('density-compact',a.density==='compact');document.body.classList.toggle('no-motion',!a.motion);document.body.classList.toggle('wide-sidebar',!!a.wide);document.body.classList.toggle('radius-sharp',a.radius==='sharp');document.body.classList.toggle('radius-pill',a.radius==='pill');document.body.classList.toggle('font-small',a.fontSize==='small');document.body.classList.toggle('font-large',a.fontSize==='large');if($('appearanceFont'))$('appearanceFont').value=a.font;document.querySelectorAll('[data-theme-choice]').forEach(x=>x.classList.toggle('on',x.dataset.themeChoice===a.theme));document.querySelectorAll('[data-accent]').forEach(x=>x.classList.toggle('on',x.dataset.accent===a.accent));document.querySelectorAll('[data-density]').forEach(x=>x.classList.toggle('on',x.dataset.density===a.density));document.querySelectorAll('[data-radius]').forEach(x=>x.classList.toggle('on',x.dataset.radius===a.radius));document.querySelectorAll('[data-font-size]').forEach(x=>x.classList.toggle('on',x.dataset.fontSize===a.fontSize));if($('motionSwitch'))$('motionSwitch').classList.toggle('on',a.motion);if($('wideSwitch'))$('wideSwitch').classList.toggle('on',a.wide);if($('glowSwitch'))$('glowSwitch').classList.toggle('on',a.glow);updateThemeIcon()}
@@ -1191,7 +1221,7 @@ var DASH_I18N = {
   fa: {
     dir:'rtl', brand:'FaultPass',
     nav_overview:'داشبورد', nav_links:'اینباندها', nav_clientmgr:'ساخت کلاینت', nav_categories:'دسته‌بندی‌ها', nav_subgroups:'گروه‌های ساب',
-    nav_plans:'پلن‌های فروش', nav_reports:'گزارش‌ها', nav_admins:'ادمین‌ها', nav_activity:'فعالیت‌ها', nav_messages:'پیام‌ها', nav_settings:'تنظیمات',
+    nav_plans:'پلن‌های فروش', nav_reports:'گزارش‌ها', nav_admins:'ادمین‌ها', nav_activity:'فعالیت‌ها', nav_messages:'پیام‌ها', nav_settings:'تنظیمات', nav_nodes:'نودها', pt_nodes:'اتصال چند پنل FaultPass و مدیریت همه از یک پنل',
     pt_overview:'وضعیت لحظه‌ای سرویس، کانفیگ‌ها و ربات فروش',
     pt_links:'مدیریت حرفه‌ای اینباندها، کلاینت‌ها و لینک‌های اشتراک',
     pt_clientmgr:'ساخت کلاینت واقعی از روی اینباند دلخواه، جدا از صفحه اینباندها',
@@ -1207,7 +1237,7 @@ var DASH_I18N = {
   en: {
     dir:'ltr', brand:'FaultPass',
     nav_overview:'Overview', nav_links:'Inbounds', nav_clientmgr:'Create Client', nav_categories:'Categories', nav_subgroups:'Sub Groups',
-    nav_plans:'Sale Plans', nav_reports:'Reports', nav_admins:'Admins', nav_activity:'Activity', nav_messages:'Messages', nav_settings:'Settings',
+    nav_plans:'Sale Plans', nav_reports:'Reports', nav_admins:'Admins', nav_activity:'Activity', nav_messages:'Messages', nav_settings:'Settings', nav_nodes:'Nodes', pt_nodes:'Connect several FaultPass panels and manage them from one',
     pt_overview:'Live status of the service, configs and sales bot',
     pt_links:'Manage inbounds, clients and subscription links',
     pt_clientmgr:'Create a real client from any inbound, separate from the inbounds page',
@@ -1491,6 +1521,1029 @@ function enableDashTranslation(){
 applyDashLang(getDashLang());
 enableDashTranslation();
 
+
+// ══════════════════════════════ نودها + پراکسی خروجی (منتقل‌شده از vodiwalker) ══════════════════════════════
+
+// ══════════════════════════════ نودها (اتصال چند پنل) ══════════════════════════════
+// این پنل هم می‌تواند «نود» باشد (توکن می‌سازد و کپی می‌کنی) و هم «اصلی» (آدرس + توکن نودها را می‌گیرد).
+let NODES_LIST = [];
+let NODE_TOKEN = {enabled:false, token:null, created_at:null};
+let NODE_TOKEN_SHOWN = false;
+let NODES_TIMER = null;
+
+function nodeStyle(){
+  if(document.getElementById('ndStyle')) return;
+  const st = document.createElement('style'); st.id = 'ndStyle';
+  st.textContent = `
+  .nd-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 18px;background:linear-gradient(90deg,rgba(245,165,36,.18),rgba(245,165,36,.06));border-bottom:1px solid rgba(245,165,36,.4);font-size:13px}
+  .nd-banner b{color:var(--warn)}
+  .nd-banner .btn{margin-inline-start:auto}
+  .nd-switch{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border:1px solid var(--line2);border-radius:11px;background:var(--panel2);color:var(--text);cursor:pointer;font-size:12.5px;font-weight:700;font-family:inherit}
+  .nd-switch.remote{border-color:rgba(245,165,36,.6);color:var(--warn)}
+  .nd-dot{width:9px;height:9px;border-radius:50%;background:var(--sub2);display:inline-block;flex:none}
+  .nd-dot.on{background:var(--good);box-shadow:0 0 0 3px rgba(34,197,139,.18)}
+  .nd-dot.off{background:var(--bad);box-shadow:0 0 0 3px rgba(242,73,85,.16)}
+  .nd-tokenbox{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}
+  .nd-tokenbox input{flex:1;min-width:220px;direction:ltr;text-align:left;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}
+  .nd-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:14px}
+  .nd-step{padding:11px 13px;border:1px dashed var(--line2);border-radius:12px;font-size:12px;color:var(--sub);line-height:1.8}
+  .nd-step b{color:var(--text);display:block;margin-bottom:2px}
+  .nd-row{display:flex;gap:14px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--panel2);margin-bottom:10px;flex-wrap:wrap}
+  .nd-main{flex:1;min-width:220px;display:flex;flex-direction:column;gap:5px}
+  .nd-main b{font-size:14px;display:flex;align-items:center;gap:8px}
+  .nd-main small{font-size:11.5px;color:var(--sub)}
+  .nd-metrics{display:flex;gap:8px;flex-wrap:wrap}
+  .nd-m{padding:6px 10px;border-radius:10px;background:var(--panel);border:1px solid var(--line);font-size:11px;color:var(--sub);display:flex;flex-direction:column;gap:1px;min-width:74px}
+  .nd-m b{font-size:13px;color:var(--text)}
+  .nd-acts{display:flex;gap:6px;flex-wrap:wrap}
+  .nd-err{color:var(--bad)!important}
+  `;
+  document.head.appendChild(st);
+}
+nodeStyle();
+
+const fmtUptime = s => { s = Number(s)||0; const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d?`${d}d ${h}h`:(h?`${h}h ${m}m`:`${m}m`); };
+function nodeCopy(text, okMsg){
+  const done = ()=>toast(okMsg || 'کپی شد ✓');
+  if(navigator.clipboard && window.isSecureContext){ navigator.clipboard.writeText(text).then(done, ()=>nodeFallbackCopy(text, done)); }
+  else nodeFallbackCopy(text, done);
+}
+function nodeFallbackCopy(text, done){
+  const t = document.createElement('textarea'); t.value = text; t.style.position='fixed'; t.style.opacity='0'; document.body.appendChild(t); t.select();
+  try{ document.execCommand('copy'); done(); }catch(e){ toast('کپی نشد؛ دستی انتخاب و کپی کن', false); }
+  t.remove();
+}
+
+// ───────────── توکن این پنل (وقتی این پنل نود است) ─────────────
+async function loadNodeToken(){
+  try{ NODE_TOKEN = await api('/api/node/token'); }catch(e){ NODE_TOKEN = {enabled:false, token:null}; }
+  renderNodeToken();
+}
+function renderNodeToken(){
+  const box = document.getElementById('nodeTokenBody'); if(!box) return;
+  const origin = location.origin;
+  if(!NODE_TOKEN.enabled){
+    box.innerHTML = `<p class="muted" style="margin-bottom:12px">این پنل فعلاً به‌عنوان «نود» قابل‌اتصال نیست. برای اینکه پنل اصلی بتواند این پنل را مدیریت کند، یک توکن بساز.</p>
+      <button class="btn primary" onclick="createNodeToken()"><i class="ti ti-key"></i> ساخت توکن نود</button>`;
+    return;
+  }
+  const tok = NODE_TOKEN.token || '';
+  box.innerHTML = `
+    <div class="grp"><label>آدرس این پنل</label><div class="nd-tokenbox"><input readonly id="ndOrigin" value="${escapeHtml(origin)}"><button class="btn" onclick="nodeCopy(document.getElementById('ndOrigin').value,'آدرس کپی شد ✓')"><i class="ti ti-copy"></i> کپی</button></div></div>
+    <div class="grp" style="margin-top:10px"><label>توکن API نود</label><div class="nd-tokenbox">
+      <input readonly id="ndToken" type="${NODE_TOKEN_SHOWN?'text':'password'}" value="${escapeHtml(tok)}">
+      <button class="btn" onclick="toggleNodeToken()"><i class="ti ${NODE_TOKEN_SHOWN?'ti-eye-off':'ti-eye'}"></i></button>
+      <button class="btn primary" onclick="nodeCopy(NODE_TOKEN.token,'توکن کپی شد ✓')"><i class="ti ti-copy"></i> کپی توکن</button>
+    </div></div>
+    <div class="nd-steps">
+      <div class="nd-step"><b>۱) کپی</b>آدرس و توکن بالا را کپی کن.</div>
+      <div class="nd-step"><b>۲) پنل اصلی</b>در پنل اصلی برو به «نودها» ← «افزودن نود».</div>
+      <div class="nd-step"><b>۳) پیست</b>آدرس و توکن را بچسبان و «تست اتصال» را بزن.</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn sm" onclick="createNodeToken(true)"><i class="ti ti-refresh"></i> ساخت مجدد (توکن قبلی باطل می‌شود)</button>
+      <button class="btn sm danger" onclick="disableNodeToken()"><i class="ti ti-lock"></i> غیرفعال‌سازی</button>
+    </div>
+    <p class="hint" style="margin-top:10px">این توکن فقط به بخش‌های عملیاتی (اینباند، پراکسی، ساب، آمار) دسترسی می‌دهد؛ رمز، ادمین‌ها و تنظیمات را باز نمی‌کند. مثل رمز نگهش دار.${NODE_TOKEN.created_at?` · ساخته‌شده: ${escapeHtml(String(NODE_TOKEN.created_at).slice(0,16).replace('T',' '))}`:''}</p>`;
+}
+function toggleNodeToken(){ NODE_TOKEN_SHOWN = !NODE_TOKEN_SHOWN; renderNodeToken(); }
+async function createNodeToken(regen){
+  if(regen && !confirm('توکن قبلی همین الان باطل می‌شود و پنل‌های اصلی که با آن وصل‌اند قطع می‌شوند. ادامه بدهم؟')) return;
+  try{ NODE_TOKEN = await api('/api/node/token', {method:'POST'}); NODE_TOKEN_SHOWN = true; renderNodeToken(); toast(regen ? 'توکن جدید ساخته شد ✓' : 'توکن ساخته شد ✓'); }
+  catch(e){ toast(e.message, false); }
+}
+async function disableNodeToken(){
+  if(!confirm('با غیرفعال‌سازی، هیچ پنل اصلی‌ای دیگر به این پنل دسترسی ندارد. ادامه بدهم؟')) return;
+  try{ NODE_TOKEN = await api('/api/node/token', {method:'DELETE'}); NODE_TOKEN_SHOWN = false; renderNodeToken(); toast('توکن نود غیرفعال شد'); }
+  catch(e){ toast(e.message, false); }
+}
+
+// ───────────── لیست نودها (وقتی این پنل اصلی است) ─────────────
+async function loadNodesPage(){
+  loadNodeToken();
+  await loadNodes();
+  clearInterval(NODES_TIMER);
+  NODES_TIMER = setInterval(()=>{ if(CURRENT_PAGE==='nodes') loadNodes(); else clearInterval(NODES_TIMER); }, 30000);
+}
+async function loadNodes(){
+  try{ const r = await api('/api/nodes'); NODES_LIST = r.nodes || []; }
+  catch(e){ NODES_LIST = []; const el = document.getElementById('nodesList'); if(el) el.innerHTML = `<div class="notice danger-note">${escapeHtml(e.message)}</div>`; return; }
+  renderNodes(); updateNodeSwitchBtn();
+}
+function nodeMetricsHtml(s){
+  if(!s || !s.online) return '';
+  const m = (label, val)=>`<div class="nd-m"><small>${label}</small><b>${val}</b></div>`;
+  return `<div class="nd-metrics">
+    ${m('پینگ', Math.round(s.latency_ms||0)+'ms')}
+    ${m('اینباند', s.inbounds ?? 0)}
+    ${m('کلاینت', s.clients ?? 0)}
+    ${m('اتصال فعال', s.connections ?? 0)}
+    ${m('ترافیک', fmtBytes(s.total_bytes||0))}
+    ${s.cpu!=null?m('CPU', Math.round(s.cpu)+'%'):''}
+    ${s.mem!=null?m('RAM', Math.round(s.mem)+'%'):''}
+    ${m('آپتایم', fmtUptime(s.uptime_seconds))}
+  </div>`;
+}
+function renderNodes(){
+  const el = document.getElementById('nodesList'); if(!el) return;
+  if(!NODES_LIST.length){ el.innerHTML = '<div class="muted" style="padding:14px">هنوز نودی اضافه نشده. روی «افزودن نود» بزن و آدرس + توکن پنل دیگر را بچسبان.</div>'; return; }
+  el.innerHTML = NODES_LIST.map(n=>{
+    const s = n.status || null;
+    const state = !n.enabled ? '' : (s ? (s.online ? 'on' : 'off') : '');
+    const label = !n.enabled ? 'غیرفعال' : (s ? (s.online ? 'آنلاین' : 'آفلاین') : 'در حال بررسی');
+    const active = ACTIVE_NODE && ACTIVE_NODE.id === n.id;
+    return `<div class="nd-row">
+      <div class="nd-main">
+        <b><span class="nd-dot ${state}"></span>${escapeHtml(n.name)} <span class="badge ${s&&s.online&&n.enabled?'green':(n.enabled&&s?'red':'gray')}">${label}</span>${active?' <span class="badge gray">در حال مدیریت</span>':''}</b>
+        <small class="mono" style="direction:ltr;text-align:left">${escapeHtml(n.url)} · توکن ${escapeHtml(n.token_hint||'')}${s&&s.version?` · v${escapeHtml(s.version)}`:''}</small>
+        ${s && !s.online && s.error ? `<small class="nd-err">${escapeHtml(s.error)}</small>`:''}
+        ${nodeMetricsHtml(s)}
+      </div>
+      <div class="nd-acts">
+        <button class="btn primary sm" onclick="manageNode('${n.id}')" ${(!n.enabled||!(s&&s.online))?'disabled':''}><i class="ti ti-server-cog"></i> مدیریت</button>
+        <button class="btn sm" onclick="checkNodeNow('${n.id}')"><i class="ti ti-activity"></i> بررسی</button>
+        <button class="btn sm" onclick="openNodeDrawer('${n.id}')"><i class="ti ti-pencil"></i></button>
+        <button class="btn sm" onclick="toggleNodeEnabled('${n.id}')" title="${n.enabled?'غیرفعال‌سازی':'فعال‌سازی'}"><i class="ti ${n.enabled?'ti-player-pause':'ti-player-play'}"></i></button>
+        <button class="btn sm danger" onclick="deleteNode('${n.id}')"><i class="ti ti-trash"></i></button>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function checkAllNodes(){
+  try{ const r = await api('/api/nodes/check-all', {method:'POST'}); NODES_LIST = r.nodes||[]; renderNodes(); updateNodeSwitchBtn(); toast('وضعیت نودها به‌روز شد ✓'); }
+  catch(e){ toast(e.message, false); }
+}
+async function checkNodeNow(id){
+  try{ const r = await api(`/api/nodes/${id}/check`, {method:'POST'}); NODES_LIST = NODES_LIST.map(n=>n.id===id?r.node:n); renderNodes(); updateNodeSwitchBtn(); }
+  catch(e){ toast(e.message, false); }
+}
+async function toggleNodeEnabled(id){
+  const n = NODES_LIST.find(x=>x.id===id); if(!n) return;
+  try{ await api('/api/nodes', {method:'POST', body: JSON.stringify({id, name:n.name, url:n.url, enabled:!n.enabled})}); await loadNodes(); }
+  catch(e){ toast(e.message, false); }
+}
+async function deleteNode(id){
+  const n = NODES_LIST.find(x=>x.id===id); if(!n) return;
+  if(!confirm(`نود «${n.name}» از این پنل حذف شود؟ (خودِ سرور نود و کانفیگ‌هایش دست‌نخورده می‌مانند.)`)) return;
+  try{
+    await api(`/api/nodes/${id}`, {method:'DELETE'});
+    if(ACTIVE_NODE && ACTIVE_NODE.id===id){ exitNodeMode(); return; }
+    await loadNodes(); toast('نود حذف شد');
+  }catch(e){ toast(e.message, false); }
+}
+
+// ───────────── افزودن / ویرایش نود ─────────────
+function openNodeDrawer(id){
+  const n = id ? NODES_LIST.find(x=>x.id===id) : null;
+  openDrawer(n ? 'ویرایش نود' : 'افزودن نود', `
+    <div class="grp"><label>نام نود</label><input id="ndName" value="${escapeHtml(n?n.name:'')}" placeholder="مثلاً: آلمان-۱"></div>
+    <div class="grp"><label>آدرس پنل نود</label><input id="ndUrl" class="mono" style="direction:ltr;text-align:left" value="${escapeHtml(n?n.url:'')}" placeholder="https://your-node.up.railway.app" oninput="ndUrlWarn()"><div class="hint" id="ndUrlHint"></div></div>
+    <div class="grp"><label>توکن API نود</label><input id="ndTok" type="password" class="mono" style="direction:ltr;text-align:left" placeholder="${n?'خالی = بدون تغییر ('+escapeHtml(n.token_hint||'')+')':'fpn_...'}" autocomplete="off"><div class="hint">از پنل نود: تب «نودها» ← «ساخت توکن نود» ← کپی.</div></div>
+    <div id="ndTestResult"></div>
+  `, `<button class="btn" onclick="testNodeForm('${id||''}')"><i class="ti ti-plug-connected"></i> تست اتصال</button>
+      <button class="btn primary" style="flex:1" id="ndSave" onclick="saveNode('${id||''}')"><i class="ti ti-device-floppy"></i> ذخیره</button>`);
+  ndUrlWarn();
+}
+function ndUrlWarn(){
+  const v = (document.getElementById('ndUrl')?.value||'').trim().toLowerCase(); const h = document.getElementById('ndUrlHint'); if(!h) return;
+  h.innerHTML = v.startsWith('http://') ? '<span class="nd-err">⚠️ با http توکن بدون رمزنگاری می‌رود؛ اگر نود روی اینترنت است حتماً https بگذار.</span>' : '';
+}
+function ndFormBody(id){
+  return {id: id||undefined, name: (document.getElementById('ndName')?.value||'').trim(), url: (document.getElementById('ndUrl')?.value||'').trim(), token: (document.getElementById('ndTok')?.value||'').trim()};
+}
+async function testNodeForm(id){
+  const box = document.getElementById('ndTestResult'); if(box) box.innerHTML = '<div class="ob-note">در حال تست اتصال...</div>';
+  try{
+    const r = (await api('/api/nodes/test', {method:'POST', body: JSON.stringify(ndFormBody(id))})).status;
+    box.innerHTML = r.online
+      ? `<div class="ob-note ok"><i class="ti ti-circle-check"></i> اتصال موفق · پینگ ${Math.round(r.latency_ms)}ms · نسخه ${escapeHtml(r.version||'?')} · ${r.inbounds??0} اینباند</div>`
+      : `<div class="ob-note"><i class="ti ti-alert-triangle"></i> <span class="nd-err">${escapeHtml(r.error||'اتصال ناموفق')}</span></div>`;
+  }catch(e){ box.innerHTML = `<div class="ob-note"><span class="nd-err">${escapeHtml(e.message)}</span></div>`; }
+}
+async function saveNode(id){
+  const btn = document.getElementById('ndSave'); if(btn) btn.disabled = true;
+  try{
+    const r = await api('/api/nodes', {method:'POST', body: JSON.stringify(ndFormBody(id))});
+    closeDrawer(); await loadNodes();
+    const s = r.node.status;
+    toast(s && s.online ? 'نود اضافه شد و آنلاین است ✓' : 'نود ذخیره شد ولی آنلاین نیست: ' + ((s&&s.error)||''), !!(s&&s.online));
+  }catch(e){ toast(e.message, false); if(btn) btn.disabled = false; }
+}
+
+// ───────────── مدیریت نود: کل پنل روی نود اجرا می‌شود ─────────────
+function manageNode(id){
+  const n = NODES_LIST.find(x=>x.id===id); if(!n) return;
+  sessionStorage.setItem('fp_active_node', JSON.stringify({id:n.id, name:n.name, url:n.url}));
+  location.reload();
+}
+function exitNodeMode(){
+  sessionStorage.removeItem('fp_active_node');
+  location.reload();
+}
+function initNodeMode(){
+  if(!ACTIVE_NODE) return;
+  ['admins','settings','nodes'].forEach(pg=>{ const t = document.querySelector(`.tab[data-pg="${pg}"]`); if(t) t.style.display='none'; });
+  const b = document.getElementById('nodeBanner');
+  if(b){
+    b.style.display = 'flex';
+    b.innerHTML = `<i class="ti ti-server-cog"></i><span>در حال مدیریت نود <b>${escapeHtml(ACTIVE_NODE.name)}</b> <span class="mono" style="direction:ltr;display:inline-block">${escapeHtml(ACTIVE_NODE.url)}</span> — همه‌ی تغییرات روی سرور آن نود اعمال می‌شود.</span><button class="btn sm" onclick="exitNodeMode()"><i class="ti ti-arrow-back-up"></i> بازگشت به این پنل</button>`;
+  }
+}
+function updateNodeSwitchBtn(){
+  const btn = document.getElementById('nodeSwitchBtn'); if(!btn) return;
+  if(!ACTIVE_NODE && !NODES_LIST.length){ btn.style.display = 'none'; return; }
+  btn.style.display = '';
+  btn.classList.toggle('remote', !!ACTIVE_NODE);
+  btn.innerHTML = `<i class="ti ${ACTIVE_NODE?'ti-server-cog':'ti-home'}"></i> ${ACTIVE_NODE?escapeHtml(ACTIVE_NODE.name):'این پنل'} <i class="ti ti-chevron-down"></i>`;
+}
+async function initNodeUi(){
+  nodeStyle(); initNodeMode();
+  try{ const r = await api('/api/nodes'); NODES_LIST = r.nodes||[]; }catch(e){ NODES_LIST = []; }
+  updateNodeSwitchBtn();
+}
+function openNodeSwitcher(){
+  ensureObStyle();
+  const cur = ACTIVE_NODE ? ACTIVE_NODE.id : '';
+  const rows = [`<label class="ob-row ${cur===''?'on':''}"><input type="radio" name="ndSw" value="" ${cur===''?'checked':''}><span class="ob-emoji">🏠</span><span class="ob-txt"><b>این پنل</b><small>پنل محلی (سرور فعلی)</small></span></label>`]
+    .concat(NODES_LIST.map(n=>{
+      const s = n.status, ok = n.enabled && s && s.online;
+      return `<label class="ob-row ${cur===n.id?'on':''}" style="${ok?'':'opacity:.55'}"><input type="radio" name="ndSw" value="${n.id}" ${cur===n.id?'checked':''} ${ok?'':'disabled'}><span class="nd-dot ${ok?'on':(n.enabled?'off':'')}"></span><span class="ob-txt"><b>${escapeHtml(n.name)}</b><small>${ok?Math.round(s.latency_ms||0)+'ms · '+(s.inbounds??0)+' اینباند':(n.enabled?'آفلاین':'غیرفعال')}</small></span></label>`;
+    })).join('');
+  const ov = document.createElement('div'); ov.className = 'ob-ov';
+  ov.innerHTML = `<div class="ob-box"><h3>انتخاب پنل برای مدیریت</h3><p>با انتخاب یک نود، تمام صفحات (اینباند، ساب، پراکسی، آمار) روی همان نود کار می‌کنند.</p><div class="ob-list ob-picker">${rows}</div>
+    <div class="ob-foot"><button class="btn" data-a="cancel">انصراف</button><button class="btn" data-a="nodes"><i class="ti ti-server-cog"></i> صفحه‌ی نودها</button><button class="btn primary" data-a="ok"><i class="ti ti-check"></i> برو</button></div></div>`;
+  const close = ()=>{ document.removeEventListener('keydown', onKey); ov.remove(); };
+  const onKey = e=>{ if(e.key==='Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  ov.addEventListener('click', e=>{
+    if(e.target===ov) return close();
+    const a = e.target.closest('[data-a]'); if(!a) return;
+    if(a.dataset.a==='cancel') return close();
+    if(a.dataset.a==='nodes'){ close(); if(ACTIVE_NODE){ sessionStorage.removeItem('fp_active_node'); location.reload(); } else gotoPage('nodes'); return; }
+    const v = (ov.querySelector('input[name=ndSw]:checked')||{}).value || '';
+    close();
+    if(v==='') { if(ACTIVE_NODE) exitNodeMode(); } else manageNode(v);
+  });
+  document.body.appendChild(ov);
+}
+
+
+// ══════════════════════ پراکسی IP (SOCKS) — مسیر خروجی ══════════════════════
+let PROXIES_CACHE = [];
+let PROXIES_ERR = '';
+async function loadProxies(){
+  try{ const r = await api('/api/proxies'); PROXIES_CACHE = r.proxies||[]; PROXIES_ERR = ''; }
+  catch(e){ PROXIES_ERR = e.message || 'خطا در دریافت لیست'; }
+  renderProxiesSettings(); renderOutboundProxySelects(); refreshOutboundPickers();
+}
+function ensureObStyle(){
+  if(document.getElementById('obStyle')) return;
+  const st = document.createElement('style'); st.id = 'obStyle';
+  st.textContent = `
+  .ob-ov{position:fixed;inset:0;background:rgba(4,6,10,.62);backdrop-filter:blur(3px);z-index:150;display:flex;align-items:center;justify-content:center;padding:16px}
+  .ob-box{width:min(460px,100%);max-height:88vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line2);border-radius:18px;box-shadow:var(--shadow-md);overflow:hidden}
+  .ob-box h3{font-size:15px;padding:16px 18px 4px}
+  .ob-box>p{font-size:12px;color:var(--sub);padding:0 18px 12px}
+  .ob-list{overflow:auto;padding:0 14px 6px;display:flex;flex-direction:column;gap:8px}
+  .ob-row{display:flex;align-items:center;gap:11px;padding:11px 12px;border:1px solid var(--line);border-radius:13px;cursor:pointer;background:var(--panel2);transition:.15s}
+  .ob-row:hover{border-color:var(--line2)}
+  .ob-row.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+  .ob-row input{accent-color:var(--accent)}
+  .ob-row .ob-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .ob-row .ob-txt b{font-size:13px}
+  .ob-row .ob-txt small,.ob-pmain small,.ob-item small{font-size:11px;color:var(--sub)}
+  .ob-foot{display:flex;gap:8px;padding:14px 16px;border-top:1px solid var(--line);margin-top:8px}
+  .ob-foot .btn{flex:1;justify-content:center}
+  .ob-flagimg{width:26px;height:19px;border-radius:3px;object-fit:cover;box-shadow:0 0 0 1px rgba(255,255,255,.12);vertical-align:middle}
+  .ob-emoji{font-size:20px;line-height:1}
+  .ob-badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;background:rgba(135,146,168,.14);color:var(--sub);white-space:nowrap}
+  .ob-badge.good{background:rgba(34,197,139,.14);color:var(--good)}
+  .ob-badge.warn{background:rgba(245,165,36,.14);color:var(--warn)}
+  .ob-badge.bad{background:rgba(242,73,85,.14);color:var(--bad)}
+  .ob-prow{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:13px;margin-bottom:9px;background:var(--panel2);flex-wrap:wrap}
+  .ob-pflag{width:30px;text-align:center}
+  .ob-pmain{flex:1;min-width:180px;display:flex;flex-direction:column;gap:3px}
+  .ob-pmain b{font-size:13px}
+  .ob-pping{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:78px}
+  .ob-pping small{font-size:10px;color:var(--sub2)}
+  .ob-ok{color:var(--good)!important}.ob-bad{color:var(--bad)!important}
+  .ib-ob-tag{display:inline-flex;align-items:center;gap:5px}
+  .ib-ob-tag .ob-flagimg{width:16px;height:12px}
+  .ob-note{padding:10px 12px;border-radius:11px;background:var(--panel2);border:1px solid var(--line);font-size:12px;margin:10px 0;display:flex;align-items:center;gap:8px}
+  .ob-note.ok{border-color:rgba(34,197,139,.35)}
+  .ob-items{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+  .ob-item{padding:9px 12px;border:1px solid var(--line);border-radius:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px}
+  .ob-box.wide{width:min(640px,100%)}
+  .ob-mgr-body{overflow:auto;padding:0 18px 4px}
+  .ob-hint{margin:8px 16px 0;padding:9px 12px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-size:11.5px;color:var(--sub);display:flex;gap:6px;align-items:flex-start}
+  .ob-picker{display:flex;flex-direction:column;gap:8px;margin:8px 0}
+  .ob-seg{display:flex;gap:6px;padding:4px;border:1px solid var(--line);border-radius:13px;background:var(--panel2);margin-bottom:14px}
+  .ob-seg button{flex:1;padding:9px 10px;border:0;border-radius:10px;background:transparent;color:var(--sub);font-size:12.5px;font-weight:700;cursor:pointer;display:flex;gap:6px;align-items:center;justify-content:center;font-family:inherit}
+  .ob-seg button.on{background:var(--accent);color:#fff}
+  `;
+  document.head.appendChild(st);
+}
+ensureObStyle();
+function flagHtml(p){
+  p = p || {};
+  const cc = String(p.country_code||'').toLowerCase();
+  const emoji = p.flag || '🏳️';
+  if(!/^[a-z]{2}$/.test(cc)) return `<span class="ob-emoji">${emoji}</span>`;
+  // ویندوز پرچم ایموجی رو نشون نمی‌ده، پس از تصویر پرچم استفاده می‌کنیم و اگه لود نشد ایموجی جایگزین می‌شه
+  return `<img class="ob-flagimg" src="https://flagcdn.com/w40/${cc}.png" alt="${cc.toUpperCase()}" loading="lazy" onerror="this.outerHTML='<span class=&quot;ob-emoji&quot;>${emoji}</span>'">`;
+}
+function pingText(p){
+  if(!p.tested_at) return 'تست‌نشده';
+  if(!p.test_ok || p.ping_ms==null) return 'قطع';
+  return `${Math.round(p.ping_ms)}ms`;
+}
+function pingClass(p){
+  if(!p.tested_at) return '';
+  if(!p.test_ok || p.ping_ms==null) return 'bad';
+  return p.ping_ms < 300 ? 'good' : (p.ping_ms < 800 ? 'warn' : 'bad');
+}
+function proxyLabel(p){
+  const flag = p.flag || '🏳️';
+  return `${flag} ${p.name} — ${p.country||'?'} · ${pingText(p)}`;
+}
+function renderOutboundProxySelects(){
+  document.querySelectorAll('[data-outbound-proxy-select]').forEach(sel=>{
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">🚀 مستقیم (خود Railway)</option>' + PROXIES_CACHE.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(proxyLabel(p))}</option>`).join('');
+    if([...sel.options].some(o=>o.value===cur)) sel.value = cur;
+  });
+}
+function renderProxiesSettings(){
+  const html = proxiesListHtml();
+  ['proxiesListWrap','dProxiesListWrap'].forEach(id=>{ const w=document.getElementById(id); if(w) w.innerHTML = html; });
+}
+function proxiesListHtml(){
+  if(PROXIES_ERR && !PROXIES_CACHE.length){ return `<div class="notice danger-note">لیست پراکسی‌ها از سرور گرفته نشد: ${escapeHtml(PROXIES_ERR)} — مطمئن شو outbound_proxy.py و python-socks روی سرور نصب/دیپلوی شده‌اند.</div>`; }
+  if(!PROXIES_CACHE.length){ return '<div class="muted" style="padding:12px">هنوز پراکسی‌ای اضافه نشده. با فرم بالا یک SOCKS5 اضافه کن.</div>'; }
+  const quick = localStorage.getItem('fp_quick_outbound_proxy') || '';
+  return PROXIES_CACHE.map(p=>`
+    <div class="ob-prow">
+      <div class="ob-pflag">${flagHtml(p)}</div>
+      <div class="ob-pmain">
+        <b>${escapeHtml(p.name)}</b>
+        <small class="mono" style="direction:ltr;text-align:left">${escapeHtml(String(p.scheme||'socks5').toUpperCase())} · ${escapeHtml(p.host)}:${p.port}${p.has_auth?' · 🔑':''}</small>
+        <small>${p.country?escapeHtml(p.country):'کشور نامشخص'}${p.city?' · '+escapeHtml(p.city):''}${p.isp?' · '+escapeHtml(p.isp):''}${p.exit_ip?` · IP خروجی: <span class="mono">${escapeHtml(p.exit_ip)}</span>`:''}${p.tls_state==='intercepted'?' · <span class="ob-bad">TLS رهگیری‌شده ⚠</span>':''}${p.breaker_open?' · <span class="ob-bad">موقتاً قطع‌شده (circuit)</span>':''}</small>
+        ${p.test_message?`<small class="${p.test_ok?'ob-ok':'ob-bad'}">${escapeHtml(p.test_message)}</small>`:''}
+        ${p.in_use?`<small>${p.in_use} کانفیگ از این پراکسی استفاده می‌کنند</small>`:''}
+      </div>
+      <div class="ob-pping"><span class="ob-badge ${pingClass(p)}">${pingText(p)}</span><small>پینگ واقعی</small>${p.tcp_ms!=null?`<small>TCP ${Math.round(p.tcp_ms)}ms</small>`:''}${p.score!=null&&p.test_ok?`<span class="ob-badge ${scGradeClass(p.grade)}" title="امتیاز کیفیت">${p.score} · ${escapeHtml(p.grade||'')}</span>`:''}</div>
+      <button class="btn sm" onclick="testProxyRow('${p.id}')"><i class="ti ti-activity"></i> تست</button>
+      <button class="btn sm" onclick="setQuickProxy('${p.id}')" title="انتخاب پیش‌فرض در پنجره‌ی «ساخت سریع»" style="${quick===p.id?'border-color:var(--accent);color:var(--accent)':''}"><i class="ti ti-star"></i></button>
+      <button class="btn sm danger" onclick="deleteProxyRow('${p.id}')"><i class="ti ti-trash"></i></button>
+    </div>`).join('');
+}
+async function testProxyRow(id, silent){
+  try{
+    if(!silent) toast('در حال تست تونل SOCKS5 و کشور خروجی...');
+    const r = await api(`/api/proxies/${id}/test`, {method:'POST'});
+    await loadProxies();
+    if(!silent){ const p=r.proxy||{}; toast(p.test_ok ? `${p.country||'?'} · ${Math.round(p.ping_ms)}ms ✓` : (p.test_message||'تست ناموفق'), !!p.test_ok); }
+  }
+  catch(e){ toast(e.message, false); }
+}
+async function testAllProxies(){
+  if(!PROXIES_CACHE.length){ toast('پراکسی‌ای برای تست نیست', false); return; }
+  toast('در حال تست همه‌ی پراکسی‌ها...');
+  try{
+    const r = await api('/api/proxies/scan/saved', {method:'POST', body: JSON.stringify({samples:2})});
+    let j;
+    do{ await scSleep(800); j = await api(`/api/proxies/scan/${r.job_id}?since=999999`); }while(j.state==='running');
+    await loadProxies();
+    toast(`${j.working} از ${j.total} پراکسی سالم است`, j.working>0);
+  }catch(e){ toast(e.message, false); }
+}
+async function deleteAllProxies(){
+  if(!PROXIES_CACHE.length){ toast('پراکسی‌ای برای حذف وجود ندارد', false); return; }
+  const inUse = PROXIES_CACHE.filter(x=>x.in_use).length;
+  const warn = inUse ? `\n\n${inUse} پراکسی در حال استفاده‌اند و همه‌ی کانفیگ‌هایشان به حالت «مستقیم» برمی‌گردند.` : '';
+  if(!confirm(`همه‌ی ${PROXIES_CACHE.length} پراکسی حذف شوند؟ این کار برگشت‌پذیر نیست.` + warn)) return;
+  try{
+    const r = await api('/api/proxies/delete-all', {method:'POST'});
+    localStorage.removeItem('fp_quick_outbound_proxy');
+    await loadProxies();
+    if(typeof loadLinks==='function') loadLinks();
+    toast(`${r.removed} پراکسی حذف شد${r.detached?` · ${r.detached} کانفیگ به مستقیم برگشت`:''} ✓`);
+  }catch(e){ toast(e.message, false); }
+}
+async function deleteProxyRow(id){
+  const p = PROXIES_CACHE.find(x=>x.id===id);
+  const warn = p && p.in_use ? `\n\n${p.in_use} کانفیگ از این پراکسی استفاده می‌کنند و به حالت «مستقیم» برمی‌گردند.` : '';
+  if(!confirm('این پراکسی حذف شود؟' + warn)) return;
+  try{ await api(`/api/proxies/${id}`, {method:'DELETE'}); if(localStorage.getItem('fp_quick_outbound_proxy')===id) localStorage.removeItem('fp_quick_outbound_proxy'); await loadProxies(); toast('حذف شد'); }
+  catch(e){ toast(e.message, false); }
+}
+function setQuickProxy(id){
+  localStorage.setItem('fp_quick_outbound_proxy', id);
+  renderProxiesSettings();
+  toast('این پراکسی در پنجره‌ی «ساخت سریع» از قبل انتخاب می‌شود ✓');
+}
+async function addProxyForm(prefix){
+  prefix = prefix || 'px';
+  const el = k => document.getElementById(prefix + k);
+  const name = el('Name')?.value.trim();
+  const host = el('Host')?.value.trim();
+  const port = Number(el('Port')?.value || 1080);
+  const username = el('User')?.value.trim();
+  const password = el('Pass')?.value.trim();
+  if(!host){ toast('آدرس پراکسی را وارد کنید', false); return; }
+  try{
+    const r = await api('/api/proxies', {method:'POST', body: JSON.stringify({name,host,port,username,password})});
+    ['Name','Host','User','Pass'].forEach(k=>{ if(el(k)) el(k).value=''; }); if(el('Port')) el('Port').value='1080';
+    await loadProxies();
+    toast('پراکسی اضافه شد — در حال تست...');
+    if(r.proxy?.id) testProxyRow(r.proxy.id);
+  }catch(e){ toast(e.message, false); }
+}
+
+// پنجره‌ی انتخاب مسیر خروجی (Promise):
+//   multi=false → '' (مستقیم) | id ;  multi=true → آرایه‌ای از '' / idها ;  انصراف → null
+//   requireProxies=true → اگه هیچ پراکسی‌ای نیست، به‌جای پرسیدن مدیریت اوتباند رو باز می‌کنه.
+async function askOutboundChoice(opts){
+  opts = opts || {};
+  await loadProxies();
+  if(!PROXIES_CACHE.length){
+    if(opts.requireProxies){ toast('هنوز پراکسی‌ای اضافه نشده؛ اول یک SOCKS5 اضافه کن', false); openOutboundManager(); return null; }
+    return opts.multi ? [''] : '';
+  }
+  ensureObStyle();
+  const cur = (Array.isArray(opts.current) ? opts.current : [opts.current || '']).filter(id=>id==='' || PROXIES_CACHE.some(p=>p.id===id));
+  return new Promise(resolve=>{
+    const ov = document.createElement('div'); ov.className = 'ob-ov';
+    ov.innerHTML = `<div class="ob-box" role="dialog"><h3>${escapeHtml(opts.title||'مسیر خروجی')}</h3><p>${escapeHtml(opts.sub||'ترافیک از کجا خارج شود؟')}</p>
+      <div class="ob-list ob-picker">${outboundPickerHtml('obChoice', !!opts.multi, cur.length ? cur : [''])}</div>
+      ${opts.note?`<div class="ob-hint"><i class="ti ti-info-circle"></i> ${escapeHtml(opts.note)}</div>`:''}
+      <div class="ob-foot"><button class="btn" data-a="cancel">انصراف</button><button class="btn primary" data-a="ok"><i class="ti ti-check"></i>ادامه</button></div></div>`;
+    const done = v => { document.removeEventListener('keydown', onKey); ov.remove(); resolve(v); };
+    const onKey = e => { if(e.key==='Escape') done(null); };
+    document.addEventListener('keydown', onKey);
+    ov.addEventListener('click', e=>{
+      if(e.target===ov) return done(null);
+      const a = e.target.closest('[data-a]'); if(!a) return;
+      if(a.dataset.a==='cancel') return done(null);
+      const vals = readOutboundPicker(ov, 'obChoice');
+      if(!vals.length){ toast('حداقل یک گزینه را انتخاب کن', false); return; }
+      done(opts.multi ? vals : vals[0]);
+    });
+    document.body.appendChild(ov);
+  });
+}
+
+// انتخابگر خروجی (رادیو یا چندانتخابی) — هم داخل پنجره و هم داخل drawer استفاده می‌شود
+function outboundPickerHtml(name, multi, selected){
+  const sel = new Set(selected && selected.length ? selected : ['']);
+  const type = multi ? 'checkbox' : 'radio';
+  const items = [{id:'', direct:true}, ...PROXIES_CACHE];
+  return items.map(x=>{
+    const on = sel.has(x.id);
+    const input = `<input type="${type}" name="${name}" value="${escapeHtml(x.id)}" ${on?'checked':''}>`;
+    if(x.direct) return `<label class="ob-row ${on?'on':''}">${input}<span class="ob-emoji">🚀</span><span class="ob-txt"><b>مستقیم (خود Railway)</b><small>ترافیک از IP سرور Railway خارج می‌شود</small></span></label>`;
+    return `<label class="ob-row ${on?'on':''}">${input}${flagHtml(x)}<span class="ob-txt"><b>${escapeHtml(x.name)}</b><small>${x.country?escapeHtml(x.country):'کشور نامشخص'}${x.exit_ip?' · '+escapeHtml(x.exit_ip):''}</small></span><span class="ob-badge ${pingClass(x)}">${pingText(x)}</span></label>`;
+  }).join('');
+}
+function readOutboundPicker(root, name){
+  return [...(root||document).querySelectorAll(`input[name="${name}"]:checked`)].map(i=>i.value);
+}
+function refreshOutboundPickers(){
+  document.querySelectorAll('[data-ob-picker]').forEach(box=>{
+    const name = box.dataset.obPicker;
+    const cur = readOutboundPicker(box, name);
+    box.innerHTML = outboundPickerHtml(name, box.dataset.multi==='1', cur);
+  });
+  if(typeof updateComboSummary==='function') updateComboSummary();
+}
+if(!window.__obPickerBound){
+  window.__obPickerBound = true;
+  document.addEventListener('change', e=>{
+    const inp = e.target;
+    if(!(inp && inp.matches && inp.matches('.ob-row input'))) return;
+    const grp = inp.closest('.ob-picker');
+    if(grp) grp.querySelectorAll('.ob-row').forEach(r=>r.classList.toggle('on', r.querySelector('input').checked));
+    if(typeof updateComboSummary==='function') updateComboSummary();
+  });
+}
+
+// ─────────────── مدیریت اوتباند (پنجره‌ی مستقل، از هر جا قابل‌باز شدن) ───────────────
+function openOutboundManager(){
+  ensureObStyle();
+  if(document.getElementById('obMgr')) return;
+  const ov = document.createElement('div'); ov.className = 'ob-ov'; ov.id = 'obMgr';
+  ov.innerHTML = `<div class="ob-box wide" role="dialog">
+    <h3><i class="ti ti-route"></i> اوتباند — پراکسی‌ها (SOCKS5 · SOCKS4 · HTTP)</h3>
+    <p>هر پراکسی که اینجا اضافه کنی تست واقعی می‌شود (پینگ از داخل تونل، کشور/پرچم/ISP خروجی، امتیاز کیفیت). بعد می‌توانی هر اینباند/کلاینت را روی آن بگذاری. برای افزودن تکیِ HTTP یا SOCKS4 آدرس کامل را بنویس، مثلاً http://user:pass@1.2.3.4:8080</p>
+    <div class="ob-mgr-body">
+      <div class="ob-seg" style="margin-bottom:12px">
+        <button type="button" id="obAddSingleBtn" class="on" onclick="setObAddMode('single')"><i class="ti ti-plus"></i> افزودن تکی</button>
+        <button type="button" id="obAddScanBtn" onclick="setObAddMode('scan')"><i class="ti ti-radar-2"></i> اسکن و افزودن گروهی</button>
+      </div>
+      <div id="obAddSingle">
+        <div class="row2"><div class="grp"><label>نام دلخواه</label><input id="dpxName" placeholder="مثلاً آلمان-۱"></div><div class="grp"><label>Host / آدرس کامل</label><input id="dpxHost" class="mono" style="direction:ltr;text-align:left" placeholder="1.2.3.4  یا  socks5://user:pass@host:1080"></div></div>
+        <div class="row2"><div class="grp"><label>Port</label><input id="dpxPort" class="mono" style="direction:ltr;text-align:left" value="1080"></div><div class="grp"><label>Username (اختیاری)</label><input id="dpxUser" class="mono" style="direction:ltr;text-align:left"></div></div>
+        <div class="row2"><div class="grp"><label>Password (اختیاری)</label><input id="dpxPass" type="password" class="mono" style="direction:ltr;text-align:left"></div><div class="grp" style="display:flex;align-items:flex-end"><button class="btn primary" style="width:100%" onclick="addProxyForm('dpx')"><i class="ti ti-plus"></i> افزودن و تست</button></div></div>
+      </div>
+      <div id="obAddScan" style="display:none">
+        <p class="hint" style="margin-top:0">لیست پراکسی‌های خودت را (پیست یا لینک لیست سرویس‌دهنده‌ات) بده؛ همه موازی و زنده با تونل واقعی تست می‌شوند: پروتکل، پینگ و پایداری، کشور/شهر/ISP خروجی، رهگیری TLS و امتیاز کیفیت. پراکسی رایگان عمومی از اینترنت جمع‌آوری نمی‌کنیم و آدرس‌های داخلی/لوکال رد می‌شوند.</p>
+        <div class="ob-seg" style="margin-bottom:8px">
+          <button type="button" id="scanSrcTextBtn" class="on" onclick="setScanSource('text')"><i class="ti ti-clipboard-text"></i> پیست لیست</button>
+          <button type="button" id="scanSrcUrlBtn" onclick="setScanSource('url')"><i class="ti ti-link"></i> از یک URL</button>
+        </div>
+        <div id="scanTextWrap"><textarea id="scanText" rows="4" class="mono" style="direction:ltr;text-align:left;width:100%;resize:vertical" placeholder="هر خط یک پروکسی — فرمت‌ها:&#10;1.2.3.4:1080&#10;1.2.3.4:1080:user:pass&#10;user:pass@1.2.3.4:1080&#10;socks5://user:pass@1.2.3.4:1080&#10;http://1.2.3.4:8080&#10;socks4://1.2.3.4:1080"></textarea></div>
+        <div id="scanUrlWrap" style="display:none"><input id="scanUrl" class="mono" style="direction:ltr;text-align:left" placeholder="https://provider.com/my-proxy-list.txt"></div>
+        <div class="sc-opts">
+          <label class="sc-opt">پروتکل<select id="scanProto"><option value="socks5">SOCKS5</option><option value="auto">تشخیص خودکار</option><option value="http">HTTP (CONNECT)</option><option value="socks4">SOCKS4</option></select></label>
+          <label class="sc-opt">دقت تست<select id="scanSamples"><option value="1">سریع (۱ نمونه)</option><option value="3" selected>متعادل (۳ نمونه)</option><option value="5">دقیق (۵ نمونه)</option></select></label>
+          <label class="sc-opt">هم‌زمانی<select id="scanConc"><option value="20">کم (۲۰)</option><option value="40" selected>متوسط (۴۰)</option><option value="80">زیاد (۸۰)</option></select></label>
+          <label class="sc-opt sc-chk"><input type="checkbox" id="scanTls" checked> بررسی رهگیری TLS</label>
+          <label class="sc-opt sc-chk"><input type="checkbox" id="scanSpeed"> تست سرعت دانلود</label>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <button class="btn primary sm" id="scanBtn" onclick="runProxyScan()"><i class="ti ti-radar-2"></i> شروع اسکن</button>
+          <button class="btn sm danger" id="scanCancelBtn" style="display:none" onclick="cancelProxyScan()"><i class="ti ti-player-stop"></i> لغو اسکن</button>
+        </div>
+        <div id="scanResultsWrap" style="margin-top:12px"></div>
+      </div>
+      <div class="divider"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><b style="font-size:13px">پراکسی‌های ذخیره‌شده</b><div style="display:flex;gap:6px"><button class="btn sm" onclick="testAllProxies()"><i class="ti ti-activity"></i> تست همه</button><button class="btn sm danger" onclick="deleteAllProxies()"><i class="ti ti-trash"></i> حذف همه</button></div></div>
+      <div id="dProxiesListWrap"></div>
+    </div>
+    <div class="ob-foot"><button class="btn" data-a="close">بستن</button></div></div>`;
+  const close = () => { document.removeEventListener('keydown', onKey); ov.remove(); };
+  const onKey = e => { if(e.key==='Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  ov.addEventListener('click', e=>{ if(e.target===ov || e.target.closest('[data-a="close"]')) close(); });
+  document.body.appendChild(ov);
+  loadProxies();
+}
+function setObAddMode(mode){
+  document.getElementById('obAddSingleBtn').classList.toggle('on', mode==='single');
+  document.getElementById('obAddScanBtn').classList.toggle('on', mode==='scan');
+  document.getElementById('obAddSingle').style.display = mode==='single' ? '' : 'none';
+  document.getElementById('obAddScan').style.display = mode==='scan' ? '' : 'none';
+}
+function setScanSource(src){
+  document.getElementById('scanSrcTextBtn').classList.toggle('on', src==='text');
+  document.getElementById('scanSrcUrlBtn').classList.toggle('on', src==='url');
+  document.getElementById('scanTextWrap').style.display = src==='text' ? '' : 'none';
+  document.getElementById('scanUrlWrap').style.display = src==='url' ? '' : 'none';
+}
+/* ===== Pro proxy scanner UI (live progress via polling) ===== */
+let SCAN_RESULTS = [];
+let SCAN_JOB = null;
+let SCAN_VIEW = [];
+let SCAN_SHOWN = 0;
+const SCAN_PAGE = 120;
+function ensureScanStyle(){
+  if(document.getElementById('scanStyle')) return;
+  const st = document.createElement('style'); st.id = 'scanStyle';
+  st.textContent = `
+  .sc-opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:8px 0}
+  .sc-opt{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--sub2);font-weight:700}
+  .sc-opt select{padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:12px}
+  .sc-chk{flex-direction:row;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);cursor:pointer;color:var(--text)}
+  .sc-chk input{accent-color:var(--accent)}
+  .sc-live{border:1px solid var(--line);border-radius:14px;padding:12px;background:var(--panel2)}
+  .sc-head{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;margin-bottom:8px}
+  .sc-head span{color:var(--sub2);font-size:11px;direction:ltr}
+  .sc-bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden}
+  .sc-bar i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#6366f1,#22d3ee);transition:width .35s}
+  .sc-bar.done i{background:linear-gradient(90deg,#22c58b,#34d399)}
+  .sc-stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--sub2)}
+  .sc-stats b{font-variant-numeric:tabular-nums;color:var(--text)}
+  .sc-stats .good b{color:var(--good)}.sc-stats .bad b{color:var(--bad)}.sc-stats .warn b{color:var(--warn)}
+  .sc-ticker{margin-top:10px;display:flex;flex-direction:column;gap:4px;max-height:132px;overflow:hidden}
+  .sc-tick{display:flex;align-items:center;gap:8px;font-size:11.5px;padding:5px 8px;border-radius:9px;background:rgba(52,211,153,.07)}
+  .sc-tick .mono{direction:ltr;unicode-bidi:isolate}
+  .sc-tick em{margin-inline-start:auto;font-style:normal;color:var(--good);font-weight:800}
+  .sc-tools{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 8px;align-items:center}
+  .sc-tools select{padding:6px 9px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:11.5px}
+  .sc-row{align-items:flex-start!important}
+  .sc-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px}
+  .sc-tags em{font-style:normal;font-size:9.5px;font-weight:800;padding:1px 7px;border-radius:99px;background:rgba(135,146,168,.14);color:var(--sub);direction:ltr;unicode-bidi:isolate}
+  .sc-tags em.good{background:rgba(34,197,139,.14);color:var(--good)}.sc-tags em.warn{background:rgba(245,165,36,.14);color:var(--warn)}.sc-tags em.bad{background:rgba(242,73,85,.14);color:var(--bad)}
+  .sc-score{flex:none;min-width:44px;height:44px;border-radius:13px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:900;font-size:15px;line-height:1;background:rgba(135,146,168,.14);color:var(--sub)}
+  .sc-score small{font-size:9px;margin-top:3px;font-weight:800}
+  .sc-score.good{background:rgba(34,197,139,.16);color:var(--good)}.sc-score.warn{background:rgba(245,165,36,.16);color:var(--warn)}.sc-score.bad{background:rgba(242,73,85,.14);color:var(--bad)}
+  .ob-sc{display:inline-block;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:800;margin-inline-start:6px}
+  `;
+  document.head.appendChild(st);
+}
+ensureScanStyle();
+function scEl(id){ return document.getElementById(id); }
+function scGradeClass(g){ return (g==='A'||g==='B') ? 'good' : (g==='C' ? 'warn' : 'bad'); }
+function scFmtTime(s){ s = Math.round(s||0); return s>=60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`; }
+function scSleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function scReset(){
+  const btn = scEl('scanBtn'), cbtn = scEl('scanCancelBtn');
+  if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-radar-2"></i> شروع اسکن'; }
+  if(cbtn) cbtn.style.display = 'none';
+}
+async function runProxyScan(){
+  const isUrl = scEl('scanSrcUrlBtn').classList.contains('on');
+  const body = isUrl ? {source:'url', url:(scEl('scanUrl').value||'').trim()} : {source:'text', text: scEl('scanText').value||''};
+  if(isUrl && !body.url){ toast('آدرس لیست را وارد کن', false); return; }
+  if(!isUrl && !body.text.trim()){ toast('لیست پروکسی را پیست کن', false); return; }
+  body.protocol = scEl('scanProto').value;
+  body.samples = Number(scEl('scanSamples').value) || 3;
+  body.tls = scEl('scanTls').checked;
+  body.speed = scEl('scanSpeed').checked;
+  body.concurrency = Number(scEl('scanConc').value) || 40;
+  const wrap = scEl('scanResultsWrap');
+  SCAN_RESULTS = []; SCAN_VIEW = []; SCAN_SHOWN = 0;
+  if(SCAN_JOB) SCAN_JOB.running = false;
+  const btn = scEl('scanBtn');
+  btn.disabled = true; btn.innerHTML = '<i class="ti ti-hourglass"></i> در حال شروع...';
+  wrap.innerHTML = '';
+  try{
+    const r = await api('/api/proxies/scan/start', {method:'POST', body: JSON.stringify(body)});
+    SCAN_JOB = {id:r.job_id, total:r.total, since:0, running:true, blocked:r.blocked||0, truncated:!!r.truncated};
+    btn.innerHTML = '<i class="ti ti-loader-2"></i> در حال اسکن...';
+    scEl('scanCancelBtn').style.display = '';
+    wrap.innerHTML = `
+      <div class="sc-live">
+        <div class="sc-head"><b id="scTitle">در حال اسکن ${r.total} پراکسی…</b><span id="scElapsed">0s</span></div>
+        <div class="sc-bar" id="scBarWrap"><i id="scBar"></i></div>
+        <div class="sc-stats"><span>بررسی‌شده <b id="scDone">0</b>/<b>${r.total}</b></span><span class="good">سالم <b id="scOk">0</b></span><span class="bad">ناموفق <b id="scBad">0</b></span><span class="warn">پرریسک <b id="scRisky">0</b></span></div>
+        ${r.blocked?`<div class="hint" style="margin:8px 0 0">${r.blocked} آدرس داخلی/لوکال به‌دلیل امنیت رد شد.</div>`:''}
+        ${r.truncated?`<div class="hint" style="margin:8px 0 0">لیست بلندتر از سقف مجاز بود؛ فقط بخش اول بررسی می‌شود.</div>`:''}
+        <div class="sc-ticker" id="scTicker"></div>
+      </div>
+      <div id="scFinal"></div>`;
+    pollScan(SCAN_JOB);
+  }catch(e){
+    wrap.innerHTML = `<div class="ob-note"><span class="nd-err">${escapeHtml(e.message)}</span></div>`;
+    scReset();
+  }
+}
+async function pollScan(job){
+  try{
+    while(job.running){
+      if(!scEl('scanResultsWrap')) return;
+      const j = await api(`/api/proxies/scan/${job.id}?since=${job.since}`);
+      if(!job.running) return;
+      job.since = j.next;
+      const fresh = [];
+      for(const x of j.results){ SCAN_RESULTS[x.i] = x; if(x.ok) fresh.push(x); }
+      updateScanLive(j, fresh);
+      if(j.state !== 'running'){ job.running = false; finishScan(j); return; }
+      await scSleep(document.hidden ? 2500 : 700);
+    }
+  }catch(e){
+    job.running = false;
+    const w = scEl('scanResultsWrap');
+    if(w) w.insertAdjacentHTML('beforeend', `<div class="ob-note"><span class="nd-err">${escapeHtml(e.message)}</span></div>`);
+    scReset();
+  }
+}
+function updateScanLive(j, fresh){
+  const pct = j.total ? Math.round(j.done / j.total * 100) : 0;
+  const set = (id, v)=>{ const el = scEl(id); if(el) el.textContent = v; };
+  const bar = scEl('scBar'); if(bar) bar.style.width = pct + '%';
+  set('scDone', j.done); set('scOk', j.working); set('scBad', j.done - j.working); set('scRisky', j.risky);
+  set('scElapsed', scFmtTime(j.elapsed));
+  const tk = scEl('scTicker');
+  if(tk && fresh.length){
+    const html = fresh.slice(-5).reverse().map(x=>`<div class="sc-tick">${flagHtml(x)}<span class="mono">${escapeHtml(x.host)}:${x.port}</span><small>${escapeHtml(x.scheme.toUpperCase())}</small><em>${Math.round(x.ping_ms)}ms · ${x.score}</em></div>`).join('');
+    tk.innerHTML = html + tk.innerHTML;
+    while(tk.children.length > 6) tk.lastElementChild.remove();
+  }
+}
+async function cancelProxyScan(){
+  if(!SCAN_JOB) return;
+  try{ await api(`/api/proxies/scan/${SCAN_JOB.id}/cancel`, {method:'POST'}); }catch(e){ toast(e.message, false); }
+}
+function finishScan(j){
+  scReset();
+  const title = scEl('scTitle'), bw = scEl('scBarWrap'), tk = scEl('scTicker');
+  if(title) title.textContent = j.state === 'cancelled' ? `اسکن لغو شد — ${j.working} سالم از ${j.done} بررسی‌شده` : `اسکن تمام شد — ${j.working} سالم از ${j.total}`;
+  if(bw) bw.classList.add('done');
+  const bar = scEl('scBar'); if(bar && j.state !== 'cancelled') bar.style.width = '100%';
+  if(tk) tk.remove();
+  renderScanFinal();
+}
+function scFilteredView(){
+  const mode = (scEl('scFilter')||{}).value || 'ok';
+  const all = SCAN_RESULTS.filter(Boolean);
+  let list = all;
+  if(mode === 'ok') list = all.filter(x=>x.ok);
+  else if(mode === 'ab') list = all.filter(x=>x.ok && (x.grade==='A'||x.grade==='B'));
+  return list.sort((a,b)=> (b.ok - a.ok) || (b.score - a.score) || ((a.ping_ms??1e9) - (b.ping_ms??1e9)));
+}
+function scanRowHtml(x){
+  const tags = [];
+  if(x.ok){
+    tags.push(`<em>${escapeHtml(x.scheme.toUpperCase())}</em>`);
+    if(x.ping_ms != null) tags.push(`<em>${Math.round(x.ping_ms)}ms</em>`);
+    if(x.jitter) tags.push(`<em>±${Math.round(x.jitter)}</em>`);
+    if(x.loss) tags.push(`<em class="bad">loss ${x.loss}%</em>`);
+    if(x.tls_state === 'clean') tags.push('<em class="good">TLS ✓</em>');
+    else if(x.tls_state === 'intercepted') tags.push('<em class="bad">TLS رهگیری‌شده ⚠</em>');
+    else if(x.tls_state === 'blocked') tags.push('<em class="warn">443 ✗</em>');
+    if(x.hosting === true) tags.push('<em>Datacenter</em>');
+    if(x.speed_mbps != null) tags.push(`<em>${x.speed_mbps} Mbps</em>`);
+  }
+  const sub = x.ok ? [x.country, x.city, x.isp].filter(Boolean).map(escapeHtml).join(' · ') || 'کشور نامشخص' : escapeHtml(x.message || 'ناموفق');
+  const preset = x.ok && x.status === 'ok' && x.score >= 70;
+  return `<label class="ob-row sc-row${preset?' on':''}" style="${x.ok?'':'opacity:.55'}">
+      <input type="checkbox" name="scanPick" value="${x.i}" ${preset?'checked':''} ${x.ok?'':'disabled'} onchange="this.closest('.ob-row').classList.toggle('on',this.checked)">
+      ${flagHtml(x)}
+      <span class="ob-txt"><b class="mono" style="direction:ltr;text-align:left">${escapeHtml(x.host)}:${x.port}${x.has_auth?' 🔑':''}</b><small>${sub}</small><span class="sc-tags">${tags.join('')}</span></span>
+      <span class="sc-score ${x.ok?scGradeClass(x.grade):'bad'}" title="امتیاز کیفیت">${x.ok?x.score:'—'}<small>${x.ok?escapeHtml(x.grade):''}</small></span>
+    </label>`;
+}
+function renderScanFinal(){
+  const box = scEl('scFinal'); if(!box) return;
+  const all = SCAN_RESULTS.filter(Boolean);
+  if(!all.length){ box.innerHTML = '<div class="sg-empty">نتیجه‌ای نیست</div>'; return; }
+  const good = all.filter(x=>x.ok && (x.grade==='A'||x.grade==='B')).length;
+  const keepMode = (scEl('scFilter')||{}).value || 'ok';
+  box.innerHTML = `
+    <div class="sc-tools">
+      <select id="scFilter" onchange="renderScanList()">
+        <option value="ok" ${keepMode==='ok'?'selected':''}>فقط سالم‌ها</option>
+        <option value="ab" ${keepMode==='ab'?'selected':''}>فقط کیفیت A و B</option>
+        <option value="all" ${keepMode==='all'?'selected':''}>همه‌ی نتیجه‌ها</option>
+      </select>
+      <button class="btn sm" onclick="selectGoodScan()"><i class="ti ti-sparkles"></i> انتخاب A/B</button>
+      <button class="btn sm" onclick="toggleAllScanPicks()"><i class="ti ti-checks"></i> همه/هیچ</button>
+      <button class="btn sm" onclick="copyScanList()"><i class="ti ti-copy"></i> کپی لیست سالم‌ها</button>
+    </div>
+    <div class="ob-list sg-picklist" id="scList"></div>
+    <div id="scMore" style="margin-top:8px"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn primary" style="flex:1;min-width:190px" onclick="addScannedProxies()"><i class="ti ti-plus"></i> افزودن انتخاب‌شده‌ها</button>
+      <button class="btn" style="flex:1;min-width:190px" onclick="addScannedProxies(true)" ${good?'':'disabled'}><i class="ti ti-rocket"></i> افزودن همه‌ی کیفیت A/B (${good})</button>
+    </div>`;
+  SCAN_SHOWN = 0;
+  renderScanList();
+}
+function renderScanList(append){
+  const list = scEl('scList'); if(!list) return;
+  if(!append){ SCAN_VIEW = scFilteredView(); SCAN_SHOWN = 0; list.innerHTML = ''; }
+  const next = SCAN_VIEW.slice(SCAN_SHOWN, SCAN_SHOWN + SCAN_PAGE);
+  if(next.length) list.insertAdjacentHTML('beforeend', next.map(scanRowHtml).join(''));
+  SCAN_SHOWN += next.length;
+  if(!SCAN_VIEW.length) list.innerHTML = '<div class="sg-empty">موردی با این فیلتر نیست</div>';
+  const left = SCAN_VIEW.length - SCAN_SHOWN;
+  const more = scEl('scMore');
+  if(more) more.innerHTML = left > 0 ? `<button class="btn sm" style="width:100%" onclick="renderScanList(true)">نمایش ${Math.min(SCAN_PAGE, left)} مورد بعدی (${left} باقی‌مانده)</button>` : '';
+}
+function toggleAllScanPicks(){
+  const boxes = [...document.querySelectorAll('input[name=scanPick]:not(:disabled)')];
+  const allChecked = boxes.length > 0 && boxes.every(b=>b.checked);
+  boxes.forEach(b=>{ b.checked = !allChecked; b.closest('.ob-row').classList.toggle('on', b.checked); });
+}
+function selectGoodScan(){
+  document.querySelectorAll('input[name=scanPick]:not(:disabled)').forEach(b=>{
+    const x = SCAN_RESULTS[Number(b.value)];
+    b.checked = !!x && (x.grade==='A' || x.grade==='B') && x.status==='ok';
+    b.closest('.ob-row').classList.toggle('on', b.checked);
+  });
+}
+async function addScannedProxies(allGood){
+  if(!SCAN_JOB) return;
+  let body;
+  if(allGood){ body = {min_score:70, limit:200}; }
+  else{
+    const idxs = [...document.querySelectorAll('input[name=scanPick]:checked')].map(i=>Number(i.value));
+    if(!idxs.length){ toast('حداقل یک پراکسی سالم را انتخاب کن', false); return; }
+    body = {indexes: idxs};
+  }
+  try{
+    const r = await api(`/api/proxies/scan/${SCAN_JOB.id}/import`, {method:'POST', body: JSON.stringify(body)});
+    toast(`${r.added} پراکسی اضافه شد${r.skipped?` (${r.skipped} مورد تکراری رد شد)`:''} ✓`, r.added>0);
+    await loadProxies();
+  }catch(e){ toast(e.message, false); }
+}
+async function copyScanList(){
+  if(!SCAN_JOB) return;
+  try{
+    const r = await api(`/api/proxies/scan/${SCAN_JOB.id}/export`, {method:'POST', body: JSON.stringify({min_score:0})});
+    const text = (r.lines||[]).join('\n');
+    if(!text){ toast('پراکسی سالمی برای کپی نیست', false); return; }
+    try{ await navigator.clipboard.writeText(text); }
+    catch(_){ const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); }
+    toast(`${r.count} پراکسی کپی شد ✓`);
+  }catch(e){ toast(e.message, false); }
+}
+
+
+// ─────────────── تغییر خروجی: تکی (دکمه‌ی روی کارت) یا گروهی (نوار انتخاب) ───────────────
+async function changeOutbound(uuids){
+  uuids = (uuids||[]).filter(Boolean);
+  if(!uuids.length) return;
+  const one = uuids.length===1 ? (LINKS.find(x=>x.uuid===uuids[0])||{}) : {};
+  const cur = uuids.length===1 ? (one.outbound_proxy_ids && one.outbound_proxy_ids.length ? one.outbound_proxy_ids : [one.outbound_proxy_id || '']) : [''];
+  const ids = await askOutboundChoice({
+    title: uuids.length===1 ? 'خروجی‌های این اینباند' : `خروجی‌های ${uuids.length} اینباند`,
+    sub: 'هر تعداد لوکیشن که بخواهی تیک بزن؛ هر کدام در لینک ساب یک کانفیگ جدا می‌شود.', current: cur, multi: true, requireProxies: true,
+    note: 'مثلاً فرانسه + آلمان + هلند → کاربر در ساب برای هر لوکیشن کانفیگ جدا می‌گیرد. حجم و انقضا مشترک است. کلاینت‌های زیرمجموعه هم همین خروجی‌ها را می‌گیرند.'
+  });
+  if(ids===null) return;
+  try{
+    const r = await api('/api/links/outbound', {method:'POST', body: JSON.stringify({uuids, outbound_proxy_ids: ids})});
+    toast(`${ids.length} خروجی روی ${r.updated} اینباند${r.clients?` و ${r.clients} کلاینت`:''} تنظیم شد ✓`);
+    loadLinks();
+  }catch(e){ toast(e.message, false); }
+}
+function bulkOutbound(){ changeOutbound(selectedLinkUuids()); }
+
+// ══════════════════════ استایل‌های کمکی (muted / notice / اعضای ساب) ══════════════════════
+(function(){
+  if(document.getElementById('fpExtraStyle')) return;
+  const st = document.createElement('style'); st.id = 'fpExtraStyle';
+  st.textContent = `
+  .muted{color:var(--sub)}
+  .notice{padding:10px 12px;border-radius:11px;border:1px solid var(--line);background:var(--panel2);font-size:12px}
+  .sg-sec{margin-bottom:14px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel2)}
+  .sg-sec-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;font-size:13px}
+  .sg-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:11px;margin-bottom:7px;background:var(--panel)}
+  .sg-row .sg-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .sg-row .sg-txt b{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sg-row .sg-txt small{font-size:11px;color:var(--sub)}
+  .sg-empty{padding:12px;text-align:center;color:var(--sub);font-size:12px}
+  .sg-picklist{max-height:300px;overflow:auto;display:flex;flex-direction:column;gap:7px;margin:8px 0}
+  .ib-ob-tag{display:inline-flex;align-items:center;gap:5px}
+  `;
+  document.head.appendChild(st);
+})();
+
+// ══════════════════════ اعضای گروه ساب: اینباند این پنل + اینباند نودهای دیگر ══════════════════════
+let SUBS_CACHE = [];
+async function openSubMembersDrawer(subId){
+  ensureObStyle();
+  if(!LINKS.length){ try{ await loadLinks(true); }catch(e){} }
+  let sub = SUBS_CACHE.find(s=>s.sub_id===subId);
+  if(!sub){ await loadSubGroups(); sub = SUBS_CACHE.find(s=>s.sub_id===subId); }
+  if(!sub){ toast('گروه پیدا نشد', false); return; }
+  openDrawer(`اعضای «${escapeHtml(sub.name||'')}»`, subMembersBodyHtml(sub),
+    `<button class="btn" style="flex:1" onclick="copyText('${escapeHtml(sub.sub_url||'')}')"><i class="ti ti-copy"></i>کپی لینک اشتراک</button>`);
+}
+function subMembersBodyHtml(sub){
+  const localIds = sub.link_ids || [];
+  const localRows = localIds.map(uid=>{
+    const l = LINKS.find(x=>x.uuid===uid);
+    const ob = l && l.outbound ? `<span style="flex:none">${flagHtml(l.outbound)}</span>` : '';
+    return `<div class="sg-row">${ob}<div class="sg-txt"><b>${escapeHtml(l?l.label:uid)}</b><small>${l?escapeHtml(protoLabel(l))+' · این پنل':'این پنل'}</small></div>
+      <button class="btn sm danger" onclick="removeLocalSubMember('${sub.sub_id}','${uid}')"><i class="ti ti-x"></i></button></div>`;
+  }).join('') || '<div class="sg-empty">هنوز اینباندی از این پنل اضافه نشده</div>';
+  const remoteRows = (sub.remote_links||[]).map(e=>`
+    <div class="sg-row"><span class="nd-dot ${e.node_missing?'':(e.active?'on':'off')}"></span><div class="sg-txt">
+      <b>${escapeHtml(e.label||e.uuid)}</b><small>${escapeHtml(e.protocol_display||'')} · نود «${escapeHtml(e.node_name||'')}»${e.last_error?` · <span class="nd-err">${escapeHtml(e.last_error)}</span>`:''}</small></div>
+      <button class="btn sm danger" onclick="removeRemoteSubMember('${sub.sub_id}','${escapeHtml(e.id)}')"><i class="ti ti-x"></i></button></div>`).join('')
+    || '<div class="sg-empty">هنوز اینباندی از نود دیگر وصل نشده</div>';
+  return `
+    <div class="sg-sec"><div class="sg-sec-head"><b>اینباندهای این پنل (${localIds.length})</b><button class="btn sm" onclick="openAddLocalMember('${sub.sub_id}')"><i class="ti ti-plus"></i> افزودن</button></div>${localRows}</div>
+    <div class="sg-sec"><div class="sg-sec-head"><b>اینباندهای روی نودهای دیگر (${(sub.remote_links||[]).length})</b><div style="display:flex;gap:6px">
+      <button class="btn sm" onclick="refreshRemoteSubMembers('${sub.sub_id}')" title="بروزرسانی از نود"><i class="ti ti-refresh"></i></button>
+      <button class="btn sm" onclick="openAddRemoteMember('${sub.sub_id}')"><i class="ti ti-plus"></i> افزودن از نود</button>
+    </div></div>${remoteRows}</div>
+    <p class="hint">یک اینباند روی این پنل + یک اینباند روی پنل دیگر (لوکیشن دیگر)، هر دو در یک لینک اشتراک.</p>`;
+}
+async function reopenSubMembers(subId){ await loadSubGroups(); openSubMembersDrawer(subId); }
+async function removeLocalSubMember(subId, uid){
+  try{ await api(`/api/subs/${subId}/links`, {method:'POST', body: JSON.stringify({link_id: uid, action:'remove'})}); toast('حذف شد'); reopenSubMembers(subId); }
+  catch(e){ toast(e.message, false); }
+}
+async function removeRemoteSubMember(subId, refId){
+  try{ await api(`/api/subs/${subId}/remote-links/${encodeURIComponent(refId)}`, {method:'DELETE'}); toast('حذف شد'); reopenSubMembers(subId); }
+  catch(e){ toast(e.message, false); }
+}
+async function refreshRemoteSubMembers(subId){
+  try{ await api(`/api/subs/${subId}/remote-links/refresh`, {method:'POST'}); toast('وضعیت نودها به‌روز شد ✓'); reopenSubMembers(subId); }
+  catch(e){ toast(e.message, false); }
+}
+function openAddLocalMember(subId){
+  const sub = SUBS_CACHE.find(s=>s.sub_id===subId); const already = new Set(sub?.link_ids||[]);
+  const options = LINKS.filter(l=>!l.is_client && !already.has(l.uuid));
+  const rows = options.map(l=>`<label class="ob-row"><input type="checkbox" name="addLocal" value="${escapeHtml(l.uuid)}"><span class="ob-txt"><b>${escapeHtml(l.label)}</b><small>${escapeHtml(protoLabel(l))} · پورت ${l.port||443}</small></span></label>`).join('')
+    || '<div class="sg-empty">اینباند دیگری در این پنل نیست</div>';
+  openDrawer('افزودن از این پنل', `<div class="ob-list ob-picker sg-picklist">${rows}</div>`,
+    `<button class="btn primary" style="flex:1" onclick="submitAddLocalMembers('${subId}')" ${options.length?'':'disabled'}><i class="ti ti-plus"></i>افزودن</button>`);
+}
+async function submitAddLocalMembers(subId){
+  const uids = [...document.querySelectorAll('input[name=addLocal]:checked')].map(i=>i.value);
+  if(!uids.length){ toast('حداقل یک اینباند انتخاب کن', false); return; }
+  try{
+    for(const uid of uids){ await api(`/api/subs/${subId}/links`, {method:'POST', body: JSON.stringify({link_id: uid, action:'add'})}); }
+    toast(`${uids.length} اینباند اضافه شد ✓`); reopenSubMembers(subId);
+  }catch(e){ toast(e.message, false); }
+}
+async function openAddRemoteMember(subId){
+  await loadNodes();
+  const usable = NODES_LIST.filter(n=>n.enabled && n.status && n.status.online);
+  if(!usable.length){ toast('نودی آنلاین برای انتخاب نیست؛ اول از تب «نودها» یک نود وصل کن', false); closeDrawer(); gotoPage('nodes'); return; }
+  openDrawer('افزودن از نود — انتخاب نود', usable.map(n=>`<label class="ob-row"><input type="radio" name="pickNode" value="${n.id}"><span class="nd-dot on"></span><span class="ob-txt"><b>${escapeHtml(n.name)}</b><small>${escapeHtml(n.url)}</small></span></label>`).join(''),
+    `<button class="btn primary" style="flex:1" onclick="loadNodeInboundsForAdd('${subId}')"><i class="ti ti-arrow-left"></i>بعدی: انتخاب اینباند</button>`);
+}
+async function loadNodeInboundsForAdd(subId){
+  const nodeId = (document.querySelector('input[name=pickNode]:checked')||{}).value;
+  if(!nodeId){ toast('یک نود انتخاب کن', false); return; }
+  try{
+    const r = await api(`/api/nodes/${nodeId}/inbounds`);
+    const sub = SUBS_CACHE.find(s=>s.sub_id===subId);
+    const already = new Set((sub?.remote_links||[]).filter(e=>e.node_id===nodeId).map(e=>e.uuid));
+    const items = (r.inbounds||[]).filter(i=>!already.has(i.uuid));
+    const rows = items.map(i=>`<label class="ob-row"><input type="checkbox" name="addRemote" value="${escapeHtml(i.uuid)}"><span class="ob-txt"><b>${escapeHtml(i.label)}</b><small>${escapeHtml(i.protocol_display||'')} · پورت ${i.port||443}${i.outbound?` · ${flagHtml(i.outbound)} ${escapeHtml(i.outbound.country||i.outbound.name||'')}`:''}</small></span></label>`).join('')
+      || '<div class="sg-empty">این نود اینباند دیگری برای افزودن ندارد</div>';
+    openDrawer(`افزودن از نود «${escapeHtml(r.node.name)}»`, `<div class="ob-list ob-picker sg-picklist">${rows}</div>`,
+      `<button class="btn primary" style="flex:1" onclick="submitAddRemoteMembers('${subId}','${nodeId}')" ${items.length?'':'disabled'}><i class="ti ti-plus"></i>افزودن</button>`);
+  }catch(e){ toast(e.message, false); }
+}
+async function submitAddRemoteMembers(subId, nodeId){
+  const uuids = [...document.querySelectorAll('input[name=addRemote]:checked')].map(i=>i.value);
+  if(!uuids.length){ toast('حداقل یک اینباند انتخاب کن', false); return; }
+  try{
+    const r = await api(`/api/subs/${subId}/remote-links`, {method:'POST', body: JSON.stringify({node_id: nodeId, uuids})});
+    if(r.failed && r.failed.length) toast(`${r.added} اضافه شد، ${r.failed.length} مورد ناموفق: ${r.failed[0].error}`, r.added>0);
+    else toast(`${r.added} اینباند از نود اضافه شد ✓`);
+    reopenSubMembers(subId);
+  }catch(e){ toast(e.message, false); }
+}
+
+
+// ══════════════════════ اسم‌های تزئینی (Name Studio) ══════════════════════
+(function(){
+  if(document.getElementById('fpNameStyle')) return;
+  const st = document.createElement('style'); st.id = 'fpNameStyle';
+  st.textContent = `
+  .name-studio{margin-top:8px;padding:10px;border-radius:14px;border:1px dashed var(--line2);background:color-mix(in srgb,var(--accent) 7%,transparent)}
+  .ns-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--sub);margin-bottom:8px}
+  .ns-head i{color:var(--accent)}
+  .ns-more{border:1px solid var(--line);background:var(--panel2);color:inherit;border-radius:10px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:inherit}
+  .ns-chips{display:flex;flex-wrap:wrap;gap:6px}
+  .ns-chip{border:1px solid color-mix(in srgb,var(--accent) 38%,transparent);background:color-mix(in srgb,var(--accent) 12%,transparent);color:inherit;border-radius:999px;padding:6px 11px;font-size:12px;cursor:pointer;direction:ltr;font-family:inherit;transition:transform .12s,background .12s}
+  .ns-chip:hover{background:color-mix(in srgb,var(--accent) 28%,transparent)}.ns-chip:active{transform:scale(.96)}
+  `;
+  document.head.appendChild(st);
+})();
+function updateBrandPreview(){
+  const el = $('brandNamePreview');
+  if(el) el.textContent = $('nameStyleEnabled')?.checked ? 'FaultPass | Aurora 🌠' : 'FaultPass';
+}
+async function saveNameStyle(){
+  try{
+    await api('/api/settings', {method:'POST', body: JSON.stringify({name_style_enabled: !!$('nameStyleEnabled')?.checked})});
+    toast('استایل نام‌ها ذخیره شد ✓'); loadSettings();
+  }catch(e){ toast(e.message, false); }
+}
+const NAME_STUDIO_INPUTS = ['fLabel','clientName','cmClientName'];
+document.addEventListener('focusin', e=>{ const el = e.target; if(el && NAME_STUDIO_INPUTS.includes(el.id)) attachNameStudio(el); });
+function attachNameStudio(input){
+  if(input.dataset.nsAttached) return; input.dataset.nsAttached = '1';
+  const box = document.createElement('div'); box.className = 'name-studio';
+  box.innerHTML = '<div class="ns-head"><span><i class="ti ti-sparkles"></i> اسم‌های خفن (کلیک کن)</span><button type="button" class="ns-more"><i class="ti ti-dice-5"></i> پیشنهاد جدید</button></div><div class="ns-chips"></div>';
+  input.insertAdjacentElement('afterend', box);
+  const chips = box.querySelector('.ns-chips');
+  async function load(){
+    chips.innerHTML = '<span class="muted">…</span>';
+    try{
+      const base = (input.value||'').split('|')[0].replace(/[^\p{L}\p{N} _-]/gu,'').trim() || 'FaultPass';
+      const r = await api('/api/name-suggestions?base='+encodeURIComponent(base)+'&n=8');
+      chips.innerHTML = '';
+      (r.suggestions||[]).forEach(n=>{
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'ns-chip'; b.textContent = n;
+        b.onclick = ()=>{ input.value = n; input.dispatchEvent(new Event('input',{bubbles:true})); toast('اسم انتخاب شد ✓'); };
+        chips.appendChild(b);
+      });
+    }catch(err){ chips.innerHTML = ''; }
+  }
+  box.querySelector('.ns-more').onclick = load; load();
+}
+
+// ══════════════════════ ساخت هوشمند: انتخاب پروفایل آماده ══════════════════════
+const AUTO_PROFILES = [
+  {id:'balanced', icon:'⚖️', name:'متعادل (پیشنهادی)', desc:'۲ آی‌پی هم‌زمان · ۴ اتصال · فرگمنت امن'},
+  {id:'normal',   icon:'🌐', name:'ساده',               desc:'بدون هیچ محدودیتی'},
+  {id:'gaming',   icon:'🎮', name:'گیمینگ',             desc:'۱ آی‌پی · ۲ اتصال · کم‌تاخیر'},
+  {id:'maximum',  icon:'🛡️', name:'حداکثر امنیت',       desc:'فینگرپرینت تصادفی · فرگمنت امن'},
+];
+function askAutoProfile(){
+  ensureObStyle();
+  return new Promise(resolve=>{
+    const last = localStorage.getItem('fp_auto_profile') || 'balanced';
+    const rows = AUTO_PROFILES.map(x=>`<label class="ob-row ${x.id===last?'on':''}"><input type="radio" name="autoProf" value="${x.id}" ${x.id===last?'checked':''}><span class="ob-emoji">${x.icon}</span><span class="ob-txt"><b>${x.name}</b><small>${x.desc}</small></span></label>`).join('');
+    const ov = document.createElement('div'); ov.className = 'ob-ov';
+    ov.innerHTML = `<div class="ob-box" role="dialog"><h3><i class="ti ti-wand"></i> ساخت هوشمند</h3><p>یک پروفایل آماده انتخاب کن؛ اسم کانفیگ هم خودکار و تزئینی ساخته می‌شود.</p>
+      <div class="ob-list ob-picker">${rows}</div>
+      <div class="ob-foot"><button class="btn" data-a="cancel">انصراف</button><button class="btn primary" data-a="ok"><i class="ti ti-check"></i>ادامه</button></div></div>`;
+    const done = v => { document.removeEventListener('keydown', onKey); ov.remove(); resolve(v); };
+    const onKey = e => { if(e.key==='Escape') done(null); };
+    document.addEventListener('keydown', onKey);
+    ov.addEventListener('click', e=>{
+      if(e.target===ov) return done(null);
+      const a = e.target.closest('[data-a]'); if(!a) return;
+      if(a.dataset.a==='cancel') return done(null);
+      const v = (ov.querySelector('input[name=autoProf]:checked')||{}).value || 'balanced';
+      localStorage.setItem('fp_auto_profile', v); done(v);
+    });
+    document.body.appendChild(ov);
+  });
+}
+
 async function boot(){
   try{
     const me = await api('/api/me');
@@ -1498,6 +2551,7 @@ async function boot(){
     $('userName').textContent = me.admin.username;
     $('userChip').querySelector('.av').textContent = (me.admin.username||'?').slice(0,1).toUpperCase();
     if(me.admin.role !== 'owner'){
+      const _nt = document.querySelector('.tab[data-pg="nodes"]'); if(_nt) _nt.style.display='none';
       document.querySelector('.tab[data-pg="admins"]').style.display='none';
       document.querySelector('.tab[data-pg="settings"]').style.display='none';
       if(!(me.admin.permissions||[]).includes('clients')){
@@ -1505,9 +2559,11 @@ async function boot(){
       }
     } else {
       loadAdminRequests();
+      initNodeUi();
     }
   }catch(e){ location.href='/login'; return; }
   try{ const p = await api('/api/protocols'); PROTOCOLS = p.protocols||[]; MANUAL_META = p.manual||{}; }catch(e){}
+  loadProxies();
   refreshOverview();
 }
 boot();
@@ -1657,7 +2713,7 @@ function ibCardHtml(l){
         <span class="ib-status-dot ${l.status_color||'gray'}" title="${l.status_color==='green'?'در حال اتصال':(l.status_color==='red'?'غیرفعال/منقضی':'فعال - بدون اتصال')}"></span>
       </div>
     </div>
-    <div class="ib-tagrow"><span>${protoLabel(l)}</span><span>${l.network||'tcp'}/${l.security||'none'}</span>${isLive?'<span class="ib-live-tag"><i></i>LIVE</span>':'<span class="ib-linkonly-tag">LINK-ONLY</span>'}<span>${escapeHtml(l.category_name||'بدون دسته')}</span></div>
+    <div class="ib-tagrow"><span>${protoLabel(l)}</span><span>${l.network||'tcp'}/${l.security||'none'}</span>${isLive?'<span class="ib-live-tag"><i></i>LIVE</span>':'<span class="ib-linkonly-tag">LINK-ONLY</span>'}<span>${escapeHtml(l.category_name||'بدون دسته')}</span>${(l.outbounds&&l.outbounds.length>1)?l.outbounds.map(o=>`<span class="ib-ob-tag" title="خروجی">${o.id?flagHtml(o):'🚀'} ${escapeHtml(o.country||o.name||'')}</span>`).join(''):(l.outbound?`<span class="ib-ob-tag" title="خروجی از طریق پراکسی">${flagHtml(l.outbound)} ${escapeHtml(l.outbound.country||l.outbound.name||'')}</span>`:'')}</div>
     <div class="ib-card-addr"><span class="mono">${escapeHtml(l.address||'0.0.0.0')}:${port}</span><small>${expSub}</small></div>
     <div class="ib-card-traffic">
       <div class="ib-tf-top"><span>مصرف</span><b>${fmtBytes(l.used_bytes||0)}${l.limit_bytes>0?' / '+fmtBytes(l.limit_bytes):' / ∞'}</b></div>
@@ -1671,6 +2727,7 @@ function ibCardHtml(l){
     <div class="ib-card-foot">
       <div class="ib-clientcell"><button class="iconbtn" title="مدیریت کلاینت‌ها" onclick="openClients('${l.uuid}')"><i class="ti ti-users"></i></button><span>مدیریت کلاینت</span></div>
       <div class="ib-card-actions">
+        <button class="iconbtn" title="خروجی (Outbound)" onclick="changeOutbound(['${l.uuid}'])"><i class="ti ti-route"></i></button>
         <button class="iconbtn" title="اشتراک" onclick="showSubLink('${l.uuid}')"><i class="ti ti-qrcode"></i></button>
         <button class="iconbtn" title="ویرایش" onclick="openLinkDrawer('${l.uuid}')"><i class="ti ti-pencil"></i></button>
         <button class="iconbtn" title="تعویض لینک (UUID جدید)" onclick="regenerateLink('${l.uuid}')"><i class="ti ti-replace"></i></button>
@@ -1917,8 +2974,15 @@ async function regenerateLink(uid){
   catch(e){ toast(e.message, false); }
 }
 async function openAutoLink(){
-  try{ await api('/api/links/auto', {method:'POST', body: JSON.stringify({profile:'balanced'})}); toast('کانفیگ خودکار ساخته شد'); loadLinks(); }
-  catch(e){ toast(e.message, false); }
+  const profile = await askAutoProfile();
+  if(profile===null) return;
+  const outbound_proxy_ids = await askOutboundChoice({title:'ساخت هوشمند', sub:'ترافیک از کجا خارج شود؟ (می‌توانی چند لوکیشن انتخاب کنی)', current: localStorage.getItem('fp_quick_outbound_proxy') || '', multi:true});
+  if(outbound_proxy_ids===null) return;
+  const outbound_proxy_id = outbound_proxy_ids[0] || '';
+  try{
+    const r = await api('/api/links/auto', {method:'POST', body: JSON.stringify({profile, outbound_proxy_id, outbound_proxy_ids})});
+    toast('ساخته شد: ' + (r.label || 'کانفیگ خودکار') + ' ✓'); loadLinks();
+  }catch(e){ toast(e.message, false); }
 }
 // Single source of truth for turning a link's stored fields into
 // {base_protocol, network, security}. Both the builder's initial render and
@@ -2150,6 +3214,11 @@ async function submitLink(uid){
   const num=id=>Math.max(0,Number($(id)?.value||0));
   const body={label:($('fLabel')?.value||'').trim(),protocol:'manual',category_id:$('fCategory')?.value||'0',limit_value:num('fLimitVal'),limit_unit:'GB',expires_days:num('fDays'),expires_at:$('fExpiresAt')?.value||'',ip_limit:num('fIpLimit'),connection_limit:num('fConnLimit'),client_limit:num('fClientLimit'),config_count:Math.max(1,Math.min(40,num('fConfigCount')||1)),clean_ips:($('fCleanIps')?.value||'').trim(),speed_limit_value:num('fSpeed'),speed_limit_unit:'MBIT',note:($('fNote')?.value||'').trim(),port,fingerprint:$('mFingerprint')?.value||'chrome',alpn:$('mAlpn')?.value||''};
   body.manual={base_protocol:base,network:net,security:base==='shadowsocks'?'none':sec,address:$('mAddress')?.value||'',path:$('mPath')?.value||'',host_header:$('mHost')?.value||'',sni:sec==='reality'?($('mRealitySni')?.value||''):($('mSni')?.value||''),alpn:$('mAlpn')?.value||'',flow:$('mFlow')?.value||'',grpc_service_name:$('mGrpcService')?.value||'',grpc_mode:$('mGrpcMode')?.value||'gun',xhttp_mode:$('mXhttpMode')?.value||'packet-up',header_type:$('mHeaderType')?.value||'',allow_insecure:!!$('mAllowInsecure')?.checked,reality_public_key:$('mRealityPbk')?.value||'',reality_short_id:$('mRealitySid')?.value||'',reality_spider_x:$('mRealitySpx')?.value||'/',ss_method:$('mSsMethod')?.value||'chacha20-ietf-poly1305',ss_password:$('mSsPassword')?.value||''};
+  if(!uid){
+    const ob = await askOutboundChoice({title:'اینباند جدید', sub:'ترافیک از کجا خارج شود؟ (چند لوکیشن = چند کانفیگ جدا در ساب)', multi:true});
+    if(ob===null) return;
+    body.outbound_proxy_ids = ob; body.outbound_proxy_id = ob[0] || '';
+  }
   try{if(uid) await api(`/api/links/${uid}`,{method:'PATCH',body:JSON.stringify(body)});else await api('/api/links',{method:'POST',body:JSON.stringify(body)});toast(uid?'اینباند بروزرسانی شد':'اینباند با موفقیت ساخته شد');closeDrawer();loadLinks();}
   catch(e){toast(e.message||'خطا در ذخیره اینباند',false)}
 }
@@ -2204,11 +3273,12 @@ async function loadSubGroups(){
   try{
     const res = await api('/api/subs');
     const subs = res.subs || [];
+    SUBS_CACHE = subs;
     $('nb-subs').textContent = subs.length;
     $('subsBody').innerHTML = subs.map(s=>`
       <tr><td>${escapeHtml(s.name||'—')}</td><td>${s.links_count||0}</td>
       <td class="mono">${escapeHtml(s.sub_url||'')}</td>
-      <td><div class="row-actions"><button class="iconbtn" onclick="deleteSubGroup('${s.sub_id}')"><i class="ti ti-trash" style="color:var(--bad)"></i></button></div></td></tr>
+      <td><div class="row-actions"><button class="iconbtn" title="اعضا (این پنل + نودها)" onclick="openSubMembersDrawer('${s.sub_id}')"><i class="ti ti-users-group"></i></button><button class="iconbtn" onclick="deleteSubGroup('${s.sub_id}')"><i class="ti ti-trash" style="color:var(--bad)"></i></button></div></td></tr>
     `).join('') || `<tr><td colspan="4" class="empty">گروهی وجود ندارد</td></tr>`;
   }catch(e){ $('subsBody').innerHTML = `<tr><td colspan="4" class="empty">در دسترس نیست</td></tr>`; }
 }
@@ -2528,6 +3598,8 @@ async function loadSettings(){
     if($('subTplId')) $('subTplId').checked = !!s.sub_remark_show_id;
     if($('subTplInbound')) $('subTplInbound').checked = !!s.sub_remark_show_inbound;
     if($('setSalesEnabled')) $('setSalesEnabled').checked = !!s.sales_enabled;
+    if($('nameStyleEnabled')) $('nameStyleEnabled').checked = s.name_style_enabled !== false;
+    updateBrandPreview();
     updateSubTemplatePreview();
     try{ const bt=await api('/api/bot/texts'); const x=bt.texts||{}; if($('botTxtWelcome'))$('botTxtWelcome').value=x.welcome||''; if($('botTxtAdmin'))$('botTxtAdmin').value=x.admin_menu||''; if($('botTxtCreated'))$('botTxtCreated').value=x.config_created||''; if($('botTxtStore'))$('botTxtStore').value=x.store_intro||''; if($('botTxtPayment'))$('botTxtPayment').value=x.payment_success||''; }catch(_){}
   }catch(e){ toast(e.message, false); }
@@ -2671,3 +3743,9 @@ async function changePassword(){
 </body>
 </html>
 """
+
+
+# ---- Untitled UI design system (applied to every page) ----
+from untitled_ui import inject as _uui
+LOGIN_HTML = _uui(LOGIN_HTML, "login")
+DASHBOARD_HTML = _uui(DASHBOARD_HTML, "app")

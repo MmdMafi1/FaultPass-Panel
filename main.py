@@ -4,6 +4,7 @@
 # ============================================================
 
 import asyncio
+from untitled_ui import inject as _uui
 import base64
 import hashlib
 import json
@@ -1220,6 +1221,12 @@ async def destroy_session(
         )
 
 
+# مقدار برگشتیِ require_auth وقتی درخواست با «توکن نود» (Bearer) احراز شده، نه نشست ادمین.
+# get_session_info() برای این مقدار None می‌ده، پس endpointهای حساس (رمز، ادمین‌ها،
+# نشست‌ها) که خودشون نشست واقعی می‌خوان با توکن نود هرگز کار نمی‌کنن.
+NODE_API_TOKEN_MARK = "__faultpass_node_api__"
+
+
 async def require_auth(
     request: Request,
 ):
@@ -1229,11 +1236,18 @@ async def require_auth(
 
     info = await get_session_info(token)
     if not info:
+        if request.headers.get("authorization"):
+            try:
+                from nodes import authorize_node_request
+            except Exception:
+                authorize_node_request = None
+            if authorize_node_request and authorize_node_request(request):
+                return NODE_API_TOKEN_MARK
         raise HTTPException(status_code=401, detail="unauthorized")
     if info.get("admin_id") != "owner":
         path = request.url.path
         permission = "dashboard"
-        if path.startswith("/api/links") or path.startswith("/api/protocols") or path.startswith("/api/reality"):
+        if path.startswith("/api/links") or path.startswith("/api/protocols") or path.startswith("/api/reality") or path.startswith("/api/proxies"):
             permission = "inbounds"
         elif path.startswith("/api/sub") or path.startswith("/sub"):
             permission = "subscriptions"
@@ -1597,9 +1611,18 @@ def get_link_info(
         "show_vless": show_vless,
         "vless": vless_link_for_link(link, uid, host) if show_vless else "",
         "vless_full": vless_link_for_link(link, uid, host),
+        # همه‌ی کانفیگ‌ها به ازای هر خروجی (برای ساب گروهی روی نودهای دیگر)
+        "vless_variants": [
+            vless_link_for_link({**vl, "label": f"{vt} | {vl.get('label') or 'Config'}"} if vt else vl, vu, host)
+            for vl, vu, vt in expand_outbound_variants(link, uid)
+        ],
         "sub": f"{get_scheme()}://{host}/sub/{uid}",
         "info": f"{get_scheme()}://{host}/info/{uid}",
         "support": SUPPORT_USERNAME,
+        "outbound_proxy_id": str(link.get("outbound_proxy_id") or ""),
+        "outbound": outbound_info(link.get("outbound_proxy_id")),
+        "outbound_proxy_ids": link_outbound_ids(link),
+        "outbounds": [outbound_info(p) or {"id": "", "name": "Direct", "flag": "🚀", "country": "مستقیم"} for p in link_outbound_ids(link)],
     }
 
 
@@ -1688,6 +1711,8 @@ async def load_state():
         CONFIG["bot_auto_start"] = bool(settings_data.get("bot_auto_start", False))
         if "sales_enabled" in settings_data:
             CONFIG["sales_enabled"] = bool(settings_data.get("sales_enabled"))
+        if "name_style_enabled" in settings_data:
+            CONFIG["name_style_enabled"] = bool(settings_data.get("name_style_enabled"))
         try:
             import telegram_bot
             telegram_bot.configure(
@@ -1768,6 +1793,11 @@ async def load_state():
 
 async def save_state():
 
+    try:
+        rebuild_variant_index()
+    except Exception:
+        pass
+
     async with SAVE_LOCK:
 
         try:
@@ -1814,6 +1844,7 @@ async def save_state():
                     "bot_admin_ids": _bot_settings_snapshot().get("admin_ids", ""),
                     "bot_auto_start": bool(CONFIG.get("bot_auto_start", False)),
                     "sales_enabled": bool(CONFIG.get("sales_enabled", SALES_ENABLED)),
+                    "name_style_enabled": bool(CONFIG.get("name_style_enabled", True)),
                 },
 
                 "saved_at":
@@ -1972,6 +2003,248 @@ async def ensure_default_link():
 # LINK MANAGEMENT
 # ============================================================
 
+# ============================================================
+# اسم‌های تزئینی (استایل خودکار نام کانفیگ): FaultPass → FaultPass | Aurora 🌠
+# ============================================================
+COOL_WORDS = [
+    "Kooh", "Darya", "Mahtab", "Kahkeshan", "Tir", "Bahman", "Sepand", "Azar", "Nasim", "Rakhsh",
+    "Shabdiz", "Gordafarid", "Esfandiar", "Bijan", "Zal", "Anahita", "Mehr", "Khazar", "Sahand", "Sabalan",
+    "Golestan", "Persepolis", "Shiraz", "Tabriz", "Hoor", "Tahmineh",
+    "Aurora", "Eclipse", "Meteor", "Galaxy", "Stellar", "Lunar", "Solar", "Horizon", "Summit", "Glacier",
+    "Cobalt", "Onyx", "Obsidian", "Crimson", "Emerald", "Sapphire", "Jaguar", "Lynx", "Hawk", "Cobra",
+    "Mustang", "Spectre", "Echo", "Flux", "Prism", "Radiant",
+]
+COOL_EMOJIS = [
+    "🌠", "🌈", "🍀", "🌊", "⛰️", "🏔️", "🌅", "🌟", "🪽", "🦄", "🐆", "🦈", "🐬", "🦉", "🐎", "🗡️",
+    "🏆", "🎖️", "💥", "🌸", "🌺", "🍁", "❄️", "☀️", "🌤️", "🧭", "🗺️", "📡", "🔋", "🎮", "🕹️", "🏁",
+    "🚩", "🪄", "🎐", "🫧",
+]
+COOL_STYLES = [
+    "{base} | {word} {emoji}",
+    "{emoji} {word} ⌁ {base}",
+    "{base} ❖ {word}{emoji}",
+    "{base} ⦗{word}⦘ {emoji}",
+    "{base} » {word} {emoji}{emoji2}",
+    "{emoji}{base}•{word}",
+    "『{base}』 {word} {emoji}",
+    "{base} ⚑ {word}",
+]
+DEFAULT_BRAND_NAME = "FaultPass"
+
+
+def name_style_on() -> bool:
+    return bool(CONFIG.get("name_style_enabled", True))
+
+
+def sanitize_display_name(name: str, fallback: str = DEFAULT_BRAND_NAME) -> str:
+    """اسمی که کاربر برای نمایش در کلاینت می‌نویسد (فارسی/انگلیسی/اموجی/فاصله) دست‌نخورده
+    می‌ماند؛ فقط کاراکترهای کنترلی/خط‌جدید حذف و طولش محدود می‌شود."""
+    cleaned = "".join(ch for ch in str(name or "") if ch.isprintable()).strip()
+    return cleaned[:40] if cleaned else fallback
+
+
+def is_name_styled(name: str) -> bool:
+    """اگر کاربر خودش اسم را تزئین کرده باشد (| یا اموجی/نماد)، دیگر دست نمی‌زنیم."""
+    text = str(name or "")
+    return "|" in text or any(ord(ch) >= 0x2190 for ch in text)
+
+
+def style_config_name(base: str, index: int | None = None, style: int | None = None) -> str:
+    base = "".join(ch for ch in str(base or "") if ch.isprintable()).strip()[:32] or DEFAULT_BRAND_NAME
+    rnd = secrets.SystemRandom()
+    if index is None:
+        word, emoji, emoji2 = rnd.choice(COOL_WORDS), rnd.choice(COOL_EMOJIS), rnd.choice(COOL_EMOJIS)
+    else:
+        word = COOL_WORDS[index % len(COOL_WORDS)]
+        emoji = COOL_EMOJIS[(index * 5 + 1) % len(COOL_EMOJIS)]
+        emoji2 = COOL_EMOJIS[(index * 5 + 9) % len(COOL_EMOJIS)]
+    tpl = COOL_STYLES[(style or 0) % len(COOL_STYLES)]
+    return tpl.format(base=base, word=word, emoji=emoji, emoji2=emoji2)[:60]
+
+
+def decorate_label(base: str, index: int | None = None) -> str:
+    """اعمال استایل خودکار روی اسم (اگر از تنظیمات فعال باشد و اسم تزئین‌نشده باشد)."""
+    if name_style_on() and not is_name_styled(base):
+        return style_config_name(base, index=index)
+    return base
+
+
+def auto_display_name() -> str:
+    """اسم خودکار خفن برای وقتی که کاربر چیزی ننوشته."""
+    if name_style_on():
+        return style_config_name(DEFAULT_BRAND_NAME)
+    return auto_config_name()
+
+
+def name_suggestions(base: str, count: int = 12) -> list:
+    base = sanitize_display_name(base, DEFAULT_BRAND_NAME)
+    rnd = secrets.SystemRandom()
+    words = rnd.sample(COOL_WORDS, min(count, len(COOL_WORDS)))
+    out = []
+    for i, word in enumerate(words):
+        tpl = COOL_STYLES[0] if i < 4 else COOL_STYLES[i % len(COOL_STYLES)]
+        out.append(tpl.format(base=base[:32], word=word, emoji=rnd.choice(COOL_EMOJIS), emoji2=rnd.choice(COOL_EMOJIS))[:60])
+    return out
+
+
+def clean_outbound_proxy_id(value) -> str:
+    """'' = مستقیم (خودِ سرور پنل). غیرخالی باید شناسه‌ی یک پراکسی موجود باشه."""
+    pid = str(value or "").strip()
+    if not pid:
+        return ""
+    try:
+        from outbound_proxy import get_proxy
+    except Exception:
+        raise HTTPException(status_code=400, detail="ماژول پراکسی خروجی در دسترس نیست")
+    if not get_proxy(pid):
+        raise HTTPException(status_code=400, detail="پراکسی انتخاب‌شده پیدا نشد (شاید حذف شده)")
+    return pid
+
+
+def clean_outbound_proxy_ids(values) -> list:
+    """لیست چندخروجی: هر عضو '' (مستقیم) یا شناسه‌ی پراکسی معتبر. تکراری‌ها حذف می‌شوند."""
+    if values is None:
+        return [""]
+    if not isinstance(values, (list, tuple)):
+        values = [values]
+    out = []
+    for v in values:
+        pid = clean_outbound_proxy_id(v)
+        if pid not in out:
+            out.append(pid)
+    return (out or [""])[:30]
+
+
+def link_outbound_ids(link: dict | None) -> list:
+    """همه‌ی خروجی‌های یک کانفیگ. اولی = خروجی UUID اصلی، بقیه = UUIDهای مجازی (variant)."""
+    link = link or {}
+    ids = link.get("outbound_proxy_ids")
+    if not isinstance(ids, list) or not ids:
+        ids = [str(link.get("outbound_proxy_id") or "")]
+    out = []
+    for v in ids:
+        v = str(v or "")
+        if v not in out:
+            out.append(v)
+    return out or [""]
+
+
+def set_link_outbounds(link: dict, ids: list):
+    ids = list(ids or [""])
+    link["outbound_proxy_ids"] = ids
+    link["outbound_proxy_id"] = ids[0]
+
+
+def outbound_variant_uuid(base_uid: str, proxy_id: str) -> str:
+    """UUID ثابت و قطعی برای «کانفیگ X از خروجی Y». با تغییر ترتیب/ری‌استارت عوض نمی‌شود."""
+    import uuid as _uuid
+    try:
+        ns = _uuid.UUID(str(base_uid))
+    except Exception:
+        ns = _uuid.NAMESPACE_URL
+    return str(_uuid.uuid5(ns, "fp-outbound:" + (proxy_id or "direct")))
+
+
+_VARIANT_INDEX: dict = {}
+_VARIANT_INDEX_AT = 0.0
+
+
+def rebuild_variant_index():
+    global _VARIANT_INDEX_AT
+    idx = {}
+    for uid, link in list(LINKS.items()):
+        ids = link_outbound_ids(link)
+        for pid in ids[1:]:
+            idx[outbound_variant_uuid(uid, pid)] = (uid, pid)
+    _VARIANT_INDEX.clear()
+    _VARIANT_INDEX.update(idx)
+    _VARIANT_INDEX_AT = time.monotonic()
+
+
+def resolve_link_uuid(uid: str):
+    """UUID ورودی ریله → (UUID اصلی، شناسه‌ی خروجی یا None).
+    None یعنی همان خروجی پیش‌فرض کانفیگ. حجم/IP/انقضا همیشه روی UUID اصلی حساب می‌شود."""
+    uid = str(uid or "")
+    if uid in LINKS:
+        return uid, None
+    hit = _VARIANT_INDEX.get(uid)
+    if hit is None and time.monotonic() - _VARIANT_INDEX_AT > 2.0:
+        rebuild_variant_index()
+        hit = _VARIANT_INDEX.get(uid)
+    if hit is None:
+        return uid, None
+    base, pid = hit
+    if pid not in link_outbound_ids(LINKS.get(base)):
+        return uid, None
+    return base, pid
+
+
+def with_outbound(link: dict | None, proxy_id):
+    if link is None or proxy_id is None:
+        return link
+    return {**link, "outbound_proxy_id": proxy_id}
+
+
+def outbound_tag(proxy_id: str) -> str:
+    info = outbound_info(proxy_id)
+    if not info:
+        return "🚀 Direct"
+    flag = info.get("flag") or ""
+    name = info.get("country") or info.get("name") or "Proxy"
+    return f"{flag} {name}".strip()
+
+
+def expand_outbound_variants(link: dict, uid: str) -> list:
+    """هر کانفیگ → یک آیتم به ازای هر خروجی: (link_dict, uuid_برای_لینک, برچسب_لوکیشن).
+    با یک خروجی، رفتار قبلی دقیقاً حفظ می‌شود (برچسب خالی)."""
+    ids = link_outbound_ids(link)
+    if len(ids) <= 1:
+        return [(link, uid, "")]
+    out = []
+    for i, pid in enumerate(ids):
+        vuid = uid if i == 0 else outbound_variant_uuid(uid, pid)
+        out.append(({**link, "outbound_proxy_id": pid}, vuid, outbound_tag(pid)))
+    return out
+
+
+def outbound_info(value):
+    """خلاصه‌ی نام/کشور/پرچم پراکسی خروجی برای نمایش در پنل (None = مستقیم)."""
+    pid = str(value or "").strip()
+    if not pid:
+        return None
+    try:
+        from outbound_proxy import proxy_summary
+        return proxy_summary(pid)
+    except Exception:
+        return None
+
+
+def public_remote_links(entries: list) -> list:
+    """نسخه‌ی امن یک لیست عضو ریموت برای پنل (بدون خودِ رشته‌ی vless)."""
+    try:
+        from nodes import get_node
+    except Exception:
+        get_node = lambda _id: None
+    out = []
+    for e in entries:
+        node = get_node(e.get("node_id") or "")
+        out.append({
+            "id": f"{e.get('node_id')}:{e.get('uuid')}",
+            "node_id": e.get("node_id"),
+            "node_name": (node or {}).get("name") or "نود حذف‌شده",
+            "node_online": bool(node),
+            "node_missing": bool(e.get("node_missing")),
+            "uuid": e.get("uuid"),
+            "label": e.get("label", ""),
+            "protocol_display": e.get("protocol_display", ""),
+            "active": bool(e.get("active", True)),
+            "last_error": e.get("last_error", ""),
+            "last_synced_at": e.get("last_synced_at"),
+            "added_at": e.get("added_at"),
+        })
+    return out
+
+
 async def make_link(
     label: str = "لینک جدید",
     limit_bytes: int = 0,
@@ -1991,6 +2264,8 @@ async def make_link(
     category_id: str = "0",
     config_count: int = 1,
     manual_fields: dict | None = None,
+    outbound_proxy_id: str = "",
+    outbound_proxy_ids: list | None = None,
 ):
 
     protocol = normalize_protocol(protocol)
@@ -2098,6 +2373,11 @@ async def make_link(
         "config_count": max(1, min(40, int(config_count or 1))),
         "client_limit": 0,
         "usage_history": [],
+        # مسیر خروجی: خالی = مستقیم از روی خود سرور. غیرخالی = شناسه‌ی یک پراکسی
+        # (SOCKS5/SOCKS4/HTTP) از outbound_proxy.py که ارتباط با مقصد از طریق اون رد می‌شه.
+        "outbound_proxy_id": str(outbound_proxy_id or "").strip(),
+        # چندخروجی: هر خروجی در ساب یک کانفیگ جدا (مثلاً فرانسه/آلمان/هلند) می‌سازد
+        "outbound_proxy_ids": list(outbound_proxy_ids) if outbound_proxy_ids else [str(outbound_proxy_id or "").strip()],
     }
 
     if protocol == "manual":
@@ -2300,6 +2580,9 @@ async def create_sub_group(
             datetime.now().isoformat(),
 
         "link_ids":
+            [],
+
+        "remote_links":
             [],
     }
 
@@ -2648,9 +2931,9 @@ h1{font-size:clamp(34px,6vw,64px);margin:18px 0 8px;letter-spacing:-2px}.sub{col
 @app.get("/plans", response_class=HTMLResponse)
 async def public_plans():
     if not sales_enabled_now():
-        return HTMLResponse("""<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FaultPass · Future Release</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#070b13;color:#f5f7fb;font-family:Tahoma,Arial,sans-serif}.box{width:min(560px,calc(100% - 36px));padding:42px 28px;text-align:center;border:1px solid rgba(255,255,255,.1);border-radius:28px;background:linear-gradient(145deg,#0d1320,#111a2a);box-shadow:0 30px 90px rgba(0,0,0,.35)}.ico{width:72px;height:72px;margin:0 auto 18px;display:grid;place-items:center;border-radius:22px;background:rgba(59,130,246,.15);font-size:30px}.muted{color:#9aa7bc;line-height:2;font-size:13px}.tag{display:inline-block;margin-top:18px;padding:8px 13px;border-radius:999px;background:rgba(53,214,255,.08);border:1px solid rgba(53,214,255,.2);color:#64dcff;font-size:11px}</style></head><body><main class="box"><div class="ico">🔒</div><h1>فروش اشتراک موقتاً غیرفعال است</h1><p class="muted">ماژول فروش و پلن‌ها در نسخه فعلی FaultPass فعال نیست. این قابلیت پس از تکمیل و تست نهایی در نسخه‌های بعدی منتشر خواهد شد.</p><span class="tag">FaultPass · Future Release</span></main></body></html>""")
+        return HTMLResponse("""<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FaultPass · Future Release</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#070b13;color:#f5f7fb;font-family:Tahoma,Arial,sans-serif}.box{width:min(560px,calc(100% - 36px));padding:42px 28px;text-align:center;border:1px solid rgba(255,255,255,.1);border-radius:28px;background:linear-gradient(145deg,#0d1320,#111a2a);box-shadow:0 30px 90px rgba(0,0,0,.35)}.ico{width:72px;height:72px;margin:0 auto 18px;display:grid;place-items:center;border-radius:22px;background:rgba(59,130,246,.15);font-size:30px}.muted{color:#9aa7bc;line-height:2;font-size:13px}.tag{display:inline-block;margin-top:18px;padding:8px 13px;border-radius:999px;background:rgba(53,214,255,.08);border:1px solid rgba(53,214,255,.2);color:#64dcff;font-size:11px}</style></head><body><main class="box"><div class="ico">🔒</div><h1>فروش اشتراک موقتاً غیرفعال است</h1><p class="muted">ماژول فروش و پلن‌ها در نسخه فعلی FaultPass فعال نیست. این قابلیت پس از تکمیل و تست نهایی در نسخه‌های بعدی منتشر خواهد شد.</p><span class="tag">FaultPass · Future Release</span></main></body></html>""".replace("</head>", __import__("untitled_ui").css("public") + "</head>"))
     import sales
-    return HTMLResponse(_store_html(sales.list_plans()))
+    return HTMLResponse(_uui(_store_html(sales.list_plans()), "public"))
 
 # ============================================================
 # HEALTH
@@ -3393,6 +3676,17 @@ async def tcp_ping(request: Request, _=Depends(require_auth)):
         return {"ok": False, "host": host, "port": port, "latency_ms": round((time.perf_counter()-started)*1000, 1), "message": f"اتصال ناموفق: {type(exc).__name__}: {str(exc)[:180]}"}
 
 
+@app.get("/api/name-suggestions")
+async def api_name_suggestions(request: Request, _=Depends(require_auth)):
+    base = request.query_params.get("base", "")
+    count = safe_int(request.query_params.get("n"), default=12, minimum=4, maximum=24)
+    return {
+        "ok": True,
+        "enabled": name_style_on(),
+        "suggestions": name_suggestions(base, count),
+    }
+
+
 @app.post("/api/links")
 async def create_link_api(
     request: Request,
@@ -3593,10 +3887,11 @@ async def create_link_api(
         if connection_limit == 0: connection_limit = 1
     label_val = body.get("label", "")
     if cat.get("random_name") or not str(label_val).strip():
-        label_val = random_config_name()
+        label_val = auto_display_name()
     else:
-        label_val = sanitize_config_name(str(label_val))
+        label_val = decorate_label(sanitize_display_name(str(label_val)))
 
+    _obs = clean_outbound_proxy_ids(body.get("outbound_proxy_ids")) if isinstance(body.get("outbound_proxy_ids"), list) else [clean_outbound_proxy_id(body.get("outbound_proxy_id"))]
     uid, link = await make_link(
         label=label_val,
         limit_bytes=limit_bytes,
@@ -3627,6 +3922,8 @@ async def create_link_api(
         category_id=category_id,
         config_count=config_count,
         manual_fields=manual_fields,
+        outbound_proxy_id=_obs[0],
+        outbound_proxy_ids=_obs,
     )
 
     async with LINKS_LOCK:
@@ -3671,17 +3968,68 @@ async def create_auto_link(
         "maximum": {"ip":0,"conn":0,"speed":0,"fp":"randomized","fragment":"safe"},
     }
     cfg = profiles.get(profile, profiles["balanced"])
+    _obs = clean_outbound_proxy_ids(body.get("outbound_proxy_ids")) if isinstance(body.get("outbound_proxy_ids"), list) else [clean_outbound_proxy_id(body.get("outbound_proxy_id"))]
     uid, link = await make_link(
-        label=auto_config_name(), limit_bytes=0, expires_at=None,
+        label=auto_display_name(), limit_bytes=0, expires_at=None,
         ip_limit=cfg["ip"], speed_limit_bytes=cfg["speed"], connection_limit=cfg["conn"],
         note=f"Auto generated by FaultPass | profile={profile}",
         protocol=protocol, fingerprint=cfg["fp"],
         alpn=DEFAULT_ALPN_BY_PROTOCOL.get(protocol, ""), port=443, fragment=cfg["fragment"],
+        outbound_proxy_id=_obs[0],
+        outbound_proxy_ids=_obs,
     )
     link["security_profile"] = profile
     result = {**get_link_info(link, uid, host), "ok": True, "profile": profile}
     log_activity("link", f"کانفیگ خودکار «{link['label']}» با {PROTOCOL_LABELS.get(protocol, protocol)} ساخته شد", "ok")
     return result
+
+
+MAX_BULK_LINKS = 500
+
+
+@app.post("/api/links/outbound")
+async def set_links_outbound(
+    request: Request,
+    _=Depends(require_auth),
+):
+    """اعمال (یا تغییر) خروجی روی هر تعداد اینباند. کلاینت‌های هر اینباند هم
+    پیش‌فرض همراهش عوض می‌شوند، چون ریلی خروجی را از UUID خودِ کلاینت می‌خواند.
+    body: {uuids: [...], outbound_proxy_id: "" | "<id>", include_clients: true}"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict) or not isinstance(body.get("uuids"), list) or not body["uuids"]:
+        raise HTTPException(status_code=400, detail="حداقل یک اینباند انتخاب کنید.")
+    if len(body["uuids"]) > MAX_BULK_LINKS:
+        raise HTTPException(status_code=400, detail=f"حداکثر {MAX_BULK_LINKS} مورد در هر بار")
+    if isinstance(body.get("outbound_proxy_ids"), list):
+        ids = clean_outbound_proxy_ids(body.get("outbound_proxy_ids"))
+    else:
+        ids = [clean_outbound_proxy_id(body.get("outbound_proxy_id"))]
+    pid = ids[0]
+    include_clients = bool(body.get("include_clients", True))
+    targets = [str(u) for u in dict.fromkeys(body["uuids"])]
+
+    updated, clients, missing = 0, 0, []
+    async with LINKS_LOCK:
+        for uid in targets:
+            link = LINKS.get(uid)
+            if link is None:
+                missing.append(uid)
+                continue
+            set_link_outbounds(link, ids)
+            updated += 1
+            if include_clients:
+                for child in LINKS.values():
+                    if child.get("parent_inbound_id") == uid:
+                        set_link_outbounds(child, ids)
+                        clients += 1
+    await save_state()
+    info = outbound_info(pid)
+    names = "، ".join(outbound_tag(p) for p in ids)
+    log_activity("link", f"خروجی {updated} اینباند و {clients} کلاینت روی «{names}» تنظیم شد", "ok")
+    return {"ok": True, "updated": updated, "clients": clients, "missing": missing, "outbound": info, "outbound_proxy_ids": ids}
 
 
 # ============================================================
@@ -3728,6 +4076,8 @@ async def add_client_to_inbound(uid: str, label: str = None, limit_bytes: int = 
     async with LINKS_LOCK:
         LINKS[child_uid]["parent_inbound_id"] = uid
         LINKS[child_uid]["is_default"] = False
+        # ریلی خروجی را از UUID خودِ کلاینت می‌خواند؛ پس باید همان خروجی اینباند را داشته باشد
+        set_link_outbounds(LINKS[child_uid], link_outbound_ids(source))
         LINKS[child_uid]["protocol_label"] = protocol_display_label(LINKS[child_uid])
     await save_state()
     log_activity("client", f"کلاینت جدید برای «{source.get('label','اینباند')}» ساخته شد", "ok")
@@ -4252,6 +4602,17 @@ async def update_link(
                 link["ss_password"] = str(manual_fields.get("ss_password") or "").strip()[:255]
             link["protocol_label"] = protocol_display_label(link)
 
+        if "outbound_proxy_ids" in body or "outbound_proxy_id" in body:
+            if isinstance(body.get("outbound_proxy_ids"), list):
+                _ids = clean_outbound_proxy_ids(body.get("outbound_proxy_ids"))
+            else:
+                _ids = [clean_outbound_proxy_id(body.get("outbound_proxy_id"))]
+            set_link_outbounds(link, _ids)
+            # کلاینت‌های این اینباند باید همان خروجی‌ها را داشته باشند (ریلی از UUID کلاینت می‌خواند)
+            for _child in LINKS.values():
+                if _child.get("parent_inbound_id") == uid:
+                    set_link_outbounds(_child, _ids)
+
         if "fragment" in body:
 
             fragment = str(
@@ -4670,15 +5031,16 @@ async def subscription_single(
         while len(hosts) < cfg_count:
             hosts.extend(clean_ips)
         hosts = hosts[:cfg_count]
+    else:
+        hosts = [host] * cfg_count
+    # چندخروجی: به ازای هر لوکیشن (فرانسه/آلمان/هلند/...) یک دسته کانفیگ جدا
+    for vlink, vuid, vtag in expand_outbound_variants(link, uuid):
         for cip in hosts:
             name = random_config_name(used_names)
             used_names.add(name)
-            lines.append(vless_link_for_link({**link, "label": name}, uuid, cip))
-    else:
-        for i in range(cfg_count):
-            name = random_config_name(used_names)
-            used_names.add(name)
-            lines.append(vless_link_for_link({**link, "label": name}, uuid, host))
+            if vtag:
+                name = f"{vtag} | {name}"
+            lines.append(vless_link_for_link({**vlink, "label": name}, vuid, cip))
     content = base64.b64encode("\n".join(lines).encode()).decode()
     profile_title = f"0.0.0.0 | {stats_remark}"
     headers = subscription_metadata_headers(
@@ -4707,9 +5069,14 @@ async def subscription_telemetry(uuid: str):
         if not link_visible_for_subscription(link):
             raise HTTPException(status_code=404, detail="subscription not found or inactive")
         limit = int(link.get("limit_bytes", 0) or 0)
+        used = int(link.get("used_bytes", 0) or 0)
         history = list(link.get("usage_history") or [])[-144:]
-        if not history:
-            history = [{"ts": now_ir().replace(second=0, microsecond=0).isoformat(), "used": used, "limit": limit}]
+        # همیشه مقدار لحظه‌ای رو به‌عنوان آخرین نقطه بفرست تا نمودار زنده باشه
+        now_ts = now_ir().replace(second=0, microsecond=0).isoformat()
+        if history and str(history[-1].get("ts", ""))[:16] == now_ts[:16]:
+            history[-1] = {**history[-1], "used": used, "limit": limit}
+        else:
+            history.append({"ts": now_ts, "used": used, "limit": limit})
         active_ips = sorted({str(x.get("ip") or "").strip() for x in connections.values() if x.get("uuid") == uuid and str(x.get("ip") or "").strip()})
         active_sessions = sum(1 for x in connections.values() if x.get("uuid") == uuid)
         return {
@@ -4760,220 +5127,333 @@ async def subscription_portal(uuid: str, request: Request):
 
     html = r'''<!doctype html><html lang="fa" dir="rtl"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#070a12"><title>__LABEL__ · FaultPass</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#FFFFFF"><title>__LABEL__ · FaultPass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
 <style>
-:root{--bg:#070a12;--bg2:#0a0e19;--card:#0c111b;--card2:#101725;--line:rgba(255,255,255,.08);--text:#f8fafc;--muted:#8792a6;--soft:#59657a;--a:#3b82f6;--a2:#2563eb;--c:#22d3ee;--g:#22c55e;--g2:#16a34a;--w:#f59e0b;--r:#ef4444;--shadow:0 24px 80px rgba(0,0,0,.35);--grid:rgba(255,255,255,.055);--url:#080c14;--radius:26px}
-body[data-theme="light"]{--bg:#f4f7fb;--bg2:#eef2f8;--card:#ffffff;--card2:#f7f9fc;--line:rgba(15,23,42,.10);--text:#0f172a;--muted:#526176;--soft:#748197;--shadow:0 20px 60px rgba(15,23,42,.10);--grid:rgba(15,23,42,.08);--url:#eef2f7}
+/* ============================================================
+   Untitled UI design tokens (v2.0) — light + dark
+   ============================================================ */
+:root{
+  --gray-25:#FCFCFD;--gray-50:#F9FAFB;--gray-100:#F2F4F7;--gray-200:#EAECF0;--gray-300:#D0D5DD;--gray-400:#98A2B3;--gray-500:#667085;--gray-600:#475467;--gray-700:#344054;--gray-800:#182230;--gray-900:#101828;--gray-950:#0C111D;
+  --brand-25:#FCFAFF;--brand-50:#F9F5FF;--brand-100:#F4EBFF;--brand-200:#E9D7FE;--brand-300:#D6BBFB;--brand-400:#B692F6;--brand-500:#9E77ED;--brand-600:#7F56D9;--brand-700:#6941C6;--brand-800:#53389E;--brand-900:#42307D;
+  --success-50:#ECFDF3;--success-200:#ABEFC6;--success-500:#17B26A;--success-600:#079455;--success-700:#067647;
+  --error-50:#FEF3F2;--error-200:#FECDCA;--error-500:#F04438;--error-600:#D92D20;--error-700:#B42318;
+  --warning-50:#FFFAEB;--warning-200:#FEDF89;--warning-500:#F79009;--warning-600:#DC6803;--warning-700:#B54708;
+  --blue-50:#EFF8FF;--blue-200:#B2DDFF;--blue-700:#175CD3;
+
+  /* semantic (light) */
+  --bg-primary:#FFFFFF;--bg-secondary:var(--gray-50);--bg-tertiary:var(--gray-100);--bg-brand-section:var(--brand-50);
+  --border-primary:var(--gray-300);--border-secondary:var(--gray-200);
+  --text-primary:var(--gray-900);--text-secondary:var(--gray-700);--text-tertiary:var(--gray-600);--text-quaternary:var(--gray-500);--text-placeholder:var(--gray-400);
+  --text-brand:var(--brand-700);--fg-brand:var(--brand-600);
+  --featured-bg:var(--brand-100);--featured-ring:var(--brand-50);--featured-fg:var(--brand-600);
+  --b-success-bg:var(--success-50);--b-success-bd:var(--success-200);--b-success-tx:var(--success-700);
+  --b-error-bg:var(--error-50);--b-error-bd:var(--error-200);--b-error-tx:var(--error-700);
+  --b-warning-bg:var(--warning-50);--b-warning-bd:var(--warning-200);--b-warning-tx:var(--warning-700);
+  --b-gray-bg:var(--gray-50);--b-gray-bd:var(--gray-200);--b-gray-tx:var(--gray-700);
+  --b-brand-bg:var(--brand-50);--b-brand-bd:var(--brand-200);--b-brand-tx:var(--brand-700);
+  --shadow-xs:0 1px 2px rgba(16,24,40,.05);
+  --shadow-sm:0 1px 3px rgba(16,24,40,.10),0 1px 2px rgba(16,24,40,.06);
+  --shadow-md:0 4px 8px -2px rgba(16,24,40,.10),0 2px 4px -2px rgba(16,24,40,.06);
+  --shadow-lg:0 12px 16px -4px rgba(16,24,40,.08),0 4px 6px -2px rgba(16,24,40,.03);
+  --ring-brand:0 0 0 4px rgba(158,119,237,.24);
+  --ring-gray:0 0 0 4px rgba(152,162,179,.14);
+  --radius-sm:6px;--radius-md:8px;--radius-lg:10px;--radius-xl:12px;--radius-2xl:16px;--radius-full:9999px;
+  --chart-grid:var(--gray-100);
+}
+body[data-theme="dark"]{
+  --bg-primary:#0C111D;--bg-secondary:#161B26;--bg-tertiary:#1F242F;--bg-brand-section:#1F242F;
+  --border-primary:#333741;--border-secondary:#1F242F;
+  --text-primary:#F5F5F6;--text-secondary:#CECFD2;--text-tertiary:#94969C;--text-quaternary:#94969C;--text-placeholder:#85888E;
+  --text-brand:#CECFD2;--fg-brand:var(--brand-500);
+  --featured-bg:#1F242F;--featured-ring:#161B26;--featured-fg:var(--brand-400);
+  --b-success-bg:#053321;--b-success-bd:#085D3A;--b-success-tx:#75E0A7;
+  --b-error-bg:#55160C;--b-error-bd:#912018;--b-error-tx:#FDA29B;
+  --b-warning-bg:#4E1D09;--b-warning-bd:#93370D;--b-warning-tx:#FEC84B;
+  --b-gray-bg:#161B26;--b-gray-bd:#333741;--b-gray-tx:#CECFD2;
+  --b-brand-bg:#2C1C5F;--b-brand-bd:#53389E;--b-brand-tx:#D6BBFB;
+  --shadow-xs:0 1px 2px rgba(0,0,0,.4);--shadow-sm:0 1px 3px rgba(0,0,0,.4),0 1px 2px rgba(0,0,0,.3);
+  --shadow-md:0 4px 8px -2px rgba(0,0,0,.45);--shadow-lg:0 12px 16px -4px rgba(0,0,0,.5);
+  --chart-grid:#1F242F;
+}
+
+/* ============================================================ base */
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
-body{margin:0;min-height:100vh;background:
-    radial-gradient(circle at 12% 0%,rgba(59,130,246,.20),transparent 32%),
-    radial-gradient(circle at 100% 18%,rgba(34,211,238,.12),transparent 30%),
-    radial-gradient(circle at 30% 100%,rgba(34,197,94,.08),transparent 28%),
-    var(--bg);
-  color:var(--text);font-family:Vazirmatn,Tahoma,sans-serif;overflow-x:hidden;transition:background .25s,color .25s}
+body{margin:0;min-height:100vh;background:var(--bg-secondary);color:var(--text-primary);
+  font-family:Inter,Vazirmatn,Tahoma,sans-serif;font-size:14px;line-height:20px;-webkit-font-smoothing:antialiased;transition:background .2s,color .2s}
 a{text-decoration:none;color:inherit}
 button{font-family:inherit;cursor:pointer}
-.wrap{width:min(760px,calc(100% - 28px));margin:auto;padding:22px 0 118px}
+.ltr{direction:ltr;unicode-bidi:isolate}
+.wrap{width:min(1024px,calc(100% - 32px));margin:auto;padding:0 0 112px}
 
-/* TOP BAR */
-.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:10px}
-.brand{display:flex;gap:11px;align-items:center;min-width:0}
-.logo{width:44px;height:44px;flex:none;border-radius:15px;display:grid;place-items:center;overflow:hidden;background:#0b1020;border:1px solid rgba(59,130,246,.4);box-shadow:0 0 22px rgba(59,130,246,.22)}
-.brand b{display:block;font-size:14px}
-.brand small{display:block;color:var(--soft);font-size:9px;margin-top:2px;letter-spacing:.06em}
-.top-actions{display:flex;align-items:center;gap:8px}
-.theme-btn,.lang-btn{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:12px;padding:9px 11px;display:flex;align-items:center;gap:6px;font-size:9px;font-weight:800;transition:.2s}
-.theme-btn:hover,.lang-btn:hover{transform:translateY(-1px);border-color:rgba(59,130,246,.35)}
-.theme-btn i{font-size:15px;color:var(--a)}
-.live{display:flex;align-items:center;gap:7px;color:var(--g);font-size:9px;font-weight:800;padding:9px 12px;border:1px solid rgba(34,197,94,.2);background:rgba(34,197,94,.08);border-radius:999px;white-space:nowrap}
-.live.off{color:var(--r);border-color:rgba(239,68,68,.22);background:rgba(239,68,68,.08)}
-.dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 12px currentColor;animation:pulse 1.8s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+/* ============================================================ header nav */
+.topbar{background:var(--bg-primary);border-bottom:1px solid var(--border-secondary);position:sticky;top:0;z-index:20}
+.topbar-in{width:min(1024px,calc(100% - 32px));margin:auto;height:72px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;gap:10px;align-items:center;min-width:0}
+.logo{width:36px;height:36px;flex:none;border-radius:var(--radius-md);overflow:hidden;border:1px solid var(--border-secondary);box-shadow:var(--shadow-xs);background:var(--bg-primary)}
+.brand b{display:block;font-size:16px;line-height:24px;font-weight:600;color:var(--text-primary)}
+.brand small{display:block;color:var(--text-tertiary);font-size:12px;line-height:18px}
+.top-actions{display:flex;align-items:center;gap:12px}
 
-/* IDENTITY CARD */
-.identity{position:relative;overflow:hidden;border:1px solid var(--line);background:linear-gradient(150deg,rgba(20,16,34,.98),rgba(10,12,20,.98));border-radius:var(--radius);padding:24px;box-shadow:var(--shadow);margin-bottom:14px;display:grid;grid-template-columns:76px 1fr auto;gap:16px;align-items:center}
-body[data-theme="light"] .identity{background:linear-gradient(150deg,#ffffff,#f7f9fc)}
-.identity:after{content:"";position:absolute;width:320px;height:320px;left:-140px;top:-200px;background:radial-gradient(circle,rgba(59,130,246,.24),transparent 68%);pointer-events:none}
-.avatar{position:relative;width:76px;height:76px;border-radius:50%;display:grid;place-items:center;font:900 30px Arial,sans-serif;color:#fff;background:radial-gradient(circle at 38% 32%,#3a2a63,#12101c);border:2px solid rgba(59,130,246,.55);box-shadow:0 0 26px rgba(59,130,246,.35)}
-.identity h1{margin:0 0 6px;font-size:clamp(18px,4vw,23px);letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.identity .chips{display:flex;flex-wrap:wrap;gap:6px}
-.chip{padding:6px 10px;border:1px solid var(--line);background:rgba(255,255,255,.03);border-radius:9px;color:var(--muted);font-size:9px}
-.chip b{color:var(--text)}
-.chip.status-on{color:var(--g);border-color:rgba(34,197,94,.25);background:rgba(34,197,94,.08)}
-.chip.status-off{color:var(--r);border-color:rgba(239,68,68,.25);background:rgba(239,68,68,.08)}
-.jump-btn{justify-self:end;align-self:center;border:1px solid rgba(59,130,246,.4);background:linear-gradient(135deg,var(--a),var(--a2));color:#fff;border-radius:14px;padding:12px 16px;font-weight:800;font-size:11px;display:flex;align-items:center;gap:6px;white-space:nowrap}
+/* ============================================================ badges (pill, with dot) */
+.badge{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:var(--radius-full);border:1px solid var(--b-gray-bd);background:var(--b-gray-bg);color:var(--b-gray-tx);font-size:12px;line-height:18px;font-weight:500;white-space:nowrap}
+.badge.lg{padding:4px 12px;font-size:14px;line-height:20px}
+.badge .dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex:none}
+.badge.success,.badge.status-on{border-color:var(--b-success-bd);background:var(--b-success-bg);color:var(--b-success-tx)}
+.badge.success .dot,.badge.status-on .dot{background:var(--success-500)}
+.badge.error,.badge.off,.badge.status-off{border-color:var(--b-error-bd);background:var(--b-error-bg);color:var(--b-error-tx)}
+.badge.off .dot,.badge.status-off .dot{background:var(--error-500)}
+.badge.warning{border-color:var(--b-warning-bd);background:var(--b-warning-bg);color:var(--b-warning-tx)}
+.badge.brand{border-color:var(--b-brand-bd);background:var(--b-brand-bg);color:var(--b-brand-tx)}
+.badge b{font-weight:600}
+.live .dot{animation:pulse 2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(23,178,106,.45)}70%{box-shadow:0 0 0 6px rgba(23,178,106,0)}100%{box-shadow:0 0 0 0 rgba(23,178,106,0)}}
+.live.off .dot{animation:none}
 
-/* GRID */
-.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}
-.card{border:1px solid var(--line);background:rgba(12,17,27,.96);border-radius:24px;box-shadow:var(--shadow);overflow:hidden}
-body[data-theme="light"] .card{background:var(--card)}
-.head{padding:17px 19px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:center}
-.head b{font-size:13px}
-.head small{display:block;color:var(--soft);font-size:8px;margin-top:3px}
-.body{padding:19px}
+/* ============================================================ buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--border-primary);background:var(--bg-primary);color:var(--text-secondary);font-size:14px;line-height:20px;font-weight:600;box-shadow:var(--shadow-xs);transition:background .15s,border-color .15s,box-shadow .15s;white-space:nowrap}
+.btn i{font-size:20px}
+.btn:hover{background:var(--bg-secondary);color:var(--text-primary)}
+.btn:focus-visible{outline:0;box-shadow:var(--shadow-xs),var(--ring-gray)}
+.btn.primary{background:var(--brand-600);border-color:var(--brand-600);color:#fff}
+.btn.primary:hover{background:var(--brand-700);border-color:var(--brand-700)}
+.btn.primary:focus-visible{box-shadow:var(--shadow-xs),var(--ring-brand)}
+.btn.sm{padding:8px 12px}
+.btn.sm i{font-size:18px}
+.btn.icon{padding:10px}
+.btn.link{border:0;background:none;box-shadow:none;padding:0;color:var(--text-brand)}
+.btn.link:hover{color:var(--brand-800);background:none}
+.btn.block{width:100%}
 
-.usage{display:grid;grid-template-columns:190px 1fr;gap:18px;align-items:center}
-.gauge{width:172px;height:172px;margin:auto;border-radius:50%;background:conic-gradient(var(--a) calc(var(--pct)*1%),rgba(255,255,255,.07) 0);position:relative;display:grid;place-items:center;box-shadow:0 0 55px rgba(59,130,246,.12)}
-.gauge:before{content:"";position:absolute;inset:13px;border-radius:50%;background:var(--card);border:1px solid var(--line)}
-body[data-theme="light"] .gauge:before{background:var(--card)}
-.gauge-center{position:relative;text-align:center}
-.gauge-center b{font-size:32px;letter-spacing:-.06em}
-.gauge-center small{display:block;color:var(--soft);font-size:9px;margin-top:2px}
-.metrics{display:grid;grid-template-columns:1fr 1fr;gap:9px}
-.metric{padding:13px;border:1px solid var(--line);border-radius:15px;background:var(--card2)}
-.metric small{display:block;color:var(--soft);font-size:8px}
-.metric b{display:block;margin-top:6px;font-size:15px;direction:ltr;text-align:right}
-.metric .ok{color:var(--g)}
-.metric .cyan{color:var(--c)}
-.meter{margin-top:12px;height:9px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden}
-.meter i{display:block;height:100%;width:calc(var(--pct)*1%);border-radius:inherit;background:linear-gradient(90deg,var(--a),var(--c));transition:width .5s ease}
-.actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
-.btn{flex:1;min-width:120px;border:1px solid var(--line);border-radius:12px;padding:12px 13px;background:var(--card2);color:var(--text);font-family:inherit;font-weight:800;font-size:10.5px;text-align:center;display:flex;align-items:center;justify-content:center;gap:6px;transition:.15s}
-.btn:hover{border-color:rgba(59,130,246,.4)}
-.btn.primary{background:linear-gradient(135deg,var(--a),var(--a2));border-color:transparent;color:#fff}
-.url{direction:ltr;text-align:left;word-break:break-all;padding:13px;border:1px dashed var(--line);border-radius:12px;background:var(--url);color:#9ca9bd;font:9.5px/1.6 monospace}
+/* ============================================================ page header */
+.page-head{padding:32px 0 24px;display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.who{display:flex;gap:16px;align-items:center;min-width:0}
+.avatar{width:64px;height:64px;flex:none;border-radius:50%;display:grid;place-items:center;font:600 24px/1 Inter,sans-serif;color:var(--brand-700);background:var(--brand-50);border:4px solid var(--bg-primary);box-shadow:var(--shadow-lg);outline:1px solid var(--border-secondary)}
+body[data-theme="dark"] .avatar{color:var(--brand-300);background:#2C1C5F}
+.who h1{margin:0;font-size:24px;line-height:32px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:58vw}
+.who p{margin:4px 0 8px;color:var(--text-tertiary);font-size:14px;line-height:20px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.head-actions{display:flex;gap:12px}
 
-.livebox{display:flex;align-items:center;justify-content:space-between;padding:14px;border:1px solid rgba(34,197,94,.18);background:rgba(34,197,94,.055);border-radius:15px;margin-bottom:10px}
-.livebox b{font-size:24px;color:var(--g)}
-.livebox small{display:block;color:var(--soft);font-size:8px}
-.session{color:var(--muted);font-size:9px}
-.status{display:inline-flex;padding:6px 9px;border-radius:9px;background:rgba(34,197,94,.10);color:var(--g);font-size:8px;font-weight:800}
-.status.off{background:rgba(239,68,68,.1);color:var(--r)}
+/* ============================================================ cards */
+.card{background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:var(--radius-xl);box-shadow:var(--shadow-xs);overflow:hidden}
+.card-head{padding:20px 24px;border-bottom:1px solid var(--border-secondary);display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.card-head h2{margin:0;font-size:18px;line-height:28px;font-weight:600;color:var(--text-primary)}
+.card-head p{margin:4px 0 0;font-size:14px;line-height:20px;color:var(--text-tertiary)}
+.card-body{padding:24px}
+.stack{display:grid;gap:24px;margin-top:24px}
+.grid-2{display:grid;grid-template-columns:1.25fr .75fr;gap:24px}
 
-.expire-card{display:grid;grid-template-columns:56px 1fr auto;gap:14px;align-items:center;padding:19px}
-.expire-icon{width:56px;height:56px;border-radius:16px;display:grid;place-items:center;font-size:24px;background:radial-gradient(circle at 35% 35%,rgba(245,158,11,.28),rgba(20,16,10,.2));border:1px solid rgba(245,158,11,.3);color:var(--w)}
-.expire-info span{display:block;color:var(--soft);font-size:9px}
-.expire-info strong{display:block;margin-top:5px;font-size:16px;direction:ltr;text-align:right}
-.shield-mini{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-size:20px;color:var(--g);background:radial-gradient(circle,rgba(34,197,94,.18),transparent 70%);border:1px solid rgba(34,197,94,.3)}
+/* metric cards */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:24px}
+.metric{background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:var(--radius-xl);box-shadow:var(--shadow-xs);padding:20px 24px;display:flex;flex-direction:column;gap:16px}
+.metric-top{display:flex;align-items:center;gap:12px}
+.metric-top span{font-size:14px;line-height:20px;font-weight:500;color:var(--text-tertiary)}
+.metric b{font-size:30px;line-height:38px;font-weight:600;letter-spacing:-.02em;color:var(--text-primary);direction:ltr;text-align:right;unicode-bidi:isolate}
 
-.chart{height:180px;position:relative}
+/* featured icon (light circle, modern) */
+.fi{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--featured-bg);box-shadow:0 0 0 6px var(--featured-ring);color:var(--featured-fg);font-size:20px}
+.fi.sq{border-radius:var(--radius-md);box-shadow:var(--shadow-xs);background:var(--bg-primary);border:1px solid var(--border-primary);color:var(--text-secondary)}
+.fi.success{background:var(--b-success-bg);box-shadow:0 0 0 6px color-mix(in srgb,var(--b-success-bg) 55%,transparent);color:var(--success-600)}
+.fi.warning{background:var(--b-warning-bg);box-shadow:0 0 0 6px color-mix(in srgb,var(--b-warning-bg) 55%,transparent);color:var(--warning-600)}
+.fi.lg{width:48px;height:48px;font-size:24px;box-shadow:0 0 0 8px var(--featured-ring)}
+
+/* usage */
+.usage{display:grid;grid-template-columns:180px 1fr;gap:32px;align-items:center}
+.ring{width:180px;height:180px;border-radius:50%;background:conic-gradient(var(--fg-brand) calc(var(--pct)*1%),var(--bg-tertiary) 0);display:grid;place-items:center;position:relative;transition:background .4s}
+.ring:before{content:"";position:absolute;inset:16px;border-radius:50%;background:var(--bg-primary)}
+.ring-c{position:relative;text-align:center}
+.ring-c small{display:block;font-size:12px;line-height:18px;font-weight:500;color:var(--text-tertiary)}
+.ring-c b{display:block;font-size:30px;line-height:38px;font-weight:600;color:var(--text-primary);letter-spacing:-.02em;direction:ltr}
+.kv{display:grid;gap:0}
+.kv-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border-secondary);font-size:14px}
+.kv-row:first-child{padding-top:0}
+.kv-row span{color:var(--text-tertiary)}
+.kv-row b{font-weight:600;color:var(--text-primary);direction:ltr;unicode-bidi:isolate}
+.progress{display:flex;align-items:center;gap:12px;margin-top:16px}
+.bar{flex:1;height:8px;border-radius:var(--radius-full);background:var(--bg-tertiary);overflow:hidden}
+.bar i{display:block;height:100%;width:0;border-radius:inherit;background:var(--fg-brand);transition:width .5s ease}
+.progress span{font-size:14px;font-weight:500;color:var(--text-secondary);direction:ltr;min-width:44px;text-align:left}
+
+/* live connections */
+.live-num{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:20px;border-bottom:1px solid var(--border-secondary);margin-bottom:8px}
+.live-num b{display:block;font-size:36px;line-height:44px;font-weight:600;letter-spacing:-.02em;color:var(--text-primary)}
+.live-num small{display:block;font-size:14px;color:var(--text-tertiary)}
+.muted{color:var(--text-tertiary)}
+
+/* alert / note */
+.alert{display:flex;gap:12px;padding:16px;border:1px solid var(--border-primary);border-radius:var(--radius-xl);background:var(--bg-secondary);font-size:14px;line-height:20px;color:var(--text-tertiary);margin-top:20px}
+.alert i{font-size:20px;color:var(--text-quaternary);flex:none;margin-top:1px}
+.actions{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
+.actions .btn{flex:1;min-width:140px}
+
+/* expiry row */
+.expire{display:flex;align-items:center;gap:20px;padding:20px 24px}
+.expire div.t{flex:1;min-width:0}
+.expire span{display:block;font-size:14px;color:var(--text-tertiary)}
+.expire strong{display:block;font-size:18px;line-height:28px;font-weight:600;color:var(--text-primary);direction:ltr;text-align:right;unicode-bidi:isolate}
+
+/* chart */
+.chart{height:220px;position:relative}
 .chart svg{width:100%;height:100%;overflow:visible}
-.chart .line{fill:none;stroke:var(--c);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 4px 8px rgba(34,211,238,.18))}
+.chart .line{fill:none;stroke:var(--fg-brand);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
 .chart .area{fill:url(#area)}
-.chart .gridline{stroke:var(--grid);stroke-width:1}
-.chart .point{fill:var(--card);stroke:var(--c);stroke-width:2}
-.chart text{fill:var(--soft);font-size:8px}
-.chart .last{fill:var(--c);stroke:var(--card);stroke-width:3}
+.chart .gridline{stroke:var(--chart-grid);stroke-width:1;vector-effect:non-scaling-stroke}
+.chart .point{fill:transparent;stroke:none}
+.chart .point.last{fill:var(--bg-primary);stroke:var(--fg-brand);stroke-width:2.5}
+.chart text{fill:var(--text-quaternary);font-size:11px;font-family:Inter,sans-serif}
 
-.qr-wrap{display:none;place-items:center;margin-bottom:13px}
+/* input w/ trailing button (Untitled "input with copy") */
+.field-label{display:block;font-size:14px;line-height:20px;font-weight:500;color:var(--text-secondary);margin-bottom:6px}
+.input-group{display:flex;direction:ltr;border:1px solid var(--border-primary);border-radius:var(--radius-md);box-shadow:var(--shadow-xs);background:var(--bg-primary);overflow:hidden}
+.input-group:focus-within{border-color:var(--brand-300);box-shadow:var(--shadow-xs),var(--ring-brand)}
+.input-group .url{flex:1;min-width:0;padding:10px 14px;font:14px/24px Inter,ui-monospace,monospace;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
+.input-group button{border:0;border-left:1px solid var(--border-primary);background:var(--bg-primary);color:var(--text-secondary);padding:10px 14px;display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
+.input-group button:hover{background:var(--bg-secondary)}
+.hint{font-size:14px;line-height:20px;color:var(--text-tertiary);margin-top:6px}
+.qr-wrap{display:none;place-items:center;margin-bottom:20px}
 .qr-wrap.show{display:grid}
-.qr-wrap img{width:170px;height:170px;padding:8px;background:#fff;border-radius:16px}
+.qr-wrap img{width:180px;height:180px;padding:12px;background:#fff;border:1px solid var(--gray-200);border-radius:var(--radius-xl);box-shadow:var(--shadow-sm)}
 
-/* APP QUICK CONNECT */
-.apps{display:grid;gap:10px;margin-top:4px}
-.app-row{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;padding:13px 14px;border-radius:18px;background:var(--card2);border:1px solid var(--line)}
-.app-icon{width:52px;height:52px;border-radius:15px;display:grid;place-items:center;font-size:23px;background:radial-gradient(circle at 35% 35%,rgba(59,130,246,.3),rgba(20,16,34,.2));border:1px solid rgba(59,130,246,.3)}
-.app-name{font-weight:800;font-size:13px}
-.app-tag{display:inline-block;margin-top:3px;padding:2px 7px;border-radius:7px;background:rgba(34,197,94,.12);color:var(--g);font-size:8px;font-weight:800}
-.app-tag.ios{background:rgba(245,158,11,.14);color:var(--w)}
-.app-go{border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.1);color:var(--a);border-radius:11px;padding:9px 13px;font-size:10px;font-weight:800;white-space:nowrap}
+/* apps list (table-ish rows) */
+.apps{display:grid}
+.app-row{display:flex;align-items:center;gap:12px;padding:16px 24px;border-bottom:1px solid var(--border-secondary)}
+.app-row:last-child{border-bottom:0}
+.app-row:hover{background:var(--bg-secondary)}
+.app-icon{width:40px;height:40px;flex:none;border-radius:var(--radius-md);display:grid;place-items:center;border:1px solid var(--border-secondary);background:var(--bg-primary);box-shadow:var(--shadow-xs);font-size:22px;color:var(--text-secondary)}
+.app-meta{flex:1;min-width:0}
+.app-name{font-size:14px;line-height:20px;font-weight:600;color:var(--text-primary)}
+.app-sub{font-size:14px;line-height:20px;color:var(--text-tertiary)}
+.app-row .badge{margin-inline-end:8px}
 
-.note{padding:12px;border-radius:13px;background:rgba(255,255,255,.025);color:var(--muted);font-size:9px;line-height:2;margin-top:10px}
-.footer{text-align:center;color:var(--soft);font-size:8px;margin-top:18px}
+.footer{text-align:center;color:var(--text-quaternary);font-size:14px;margin-top:32px}
 
-/* BOTTOM NAV (mobile) */
-.bottom-nav{display:none}
-@media(max-width:760px){
-  .bottom-nav{
-    display:grid;position:fixed;z-index:30;left:50%;bottom:12px;transform:translateX(-50%);
-    width:min(420px,calc(100% - 24px));grid-template-columns:repeat(3,1fr);align-items:center;
-    padding:7px;border-radius:26px;background:rgba(12,17,27,.94);border:1px solid var(--line);
-    box-shadow:0 15px 35px rgba(0,0,0,.45);backdrop-filter:blur(18px)
-  }
-  body[data-theme="light"] .bottom-nav{background:rgba(255,255,255,.94)}
-  .bottom-nav button{height:52px;border:0;background:transparent;color:var(--text);font-size:19px;border-radius:19px;display:grid;place-items:center;gap:2px}
-  .bottom-nav button small{font-size:8px;font-weight:800;color:var(--soft)}
-  .bottom-nav button.active{background:linear-gradient(135deg,rgba(59,130,246,.22),rgba(34,211,238,.14));color:var(--a)}
-  .bottom-nav button.active small{color:var(--a)}
-}
-.toast{position:fixed;top:16px;left:50%;z-index:100;transform:translate(-50%,-120px);padding:12px 18px;border-radius:14px;background:rgba(34,197,94,.14);color:var(--g);border:1px solid rgba(34,197,94,.35);transition:.3s;font-size:11px;font-weight:800;backdrop-filter:blur(10px)}
+/* toast (Untitled notification) */
+.toast{position:fixed;top:16px;left:50%;z-index:100;transform:translate(-50%,-140%);display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:var(--radius-xl);background:var(--bg-primary);border:1px solid var(--border-primary);box-shadow:var(--shadow-lg);color:var(--text-primary);font-size:14px;font-weight:600;transition:transform .3s cubic-bezier(.2,.8,.2,1)}
+.toast:before{content:"";width:10px;height:10px;border-radius:50%;background:var(--success-500);box-shadow:0 0 0 4px var(--b-success-bg)}
 .toast.show{transform:translate(-50%,0)}
 
-@media(max-width:800px){.grid,.usage{grid-template-columns:1fr}.gauge{width:170px;height:170px}.metrics{grid-template-columns:1fr 1fr}.identity{padding:20px}}
-@media(max-width:500px){.metrics{grid-template-columns:1fr}.wrap{width:min(100% - 18px,1120px);padding-top:14px}.identity{border-radius:21px;grid-template-columns:60px 1fr;row-gap:12px}.identity h1{font-size:17px}.jump-btn{grid-column:1/-1}.card{border-radius:20px}.expire-card{grid-template-columns:44px 1fr}.shield-mini{display:none}}
-</style></head><body><main class="wrap">
+/* mobile bottom bar */
+.bottom-nav{display:none}
+@media(max-width:760px){
+  .bottom-nav{display:grid;position:fixed;z-index:30;left:0;right:0;bottom:0;grid-template-columns:repeat(2,1fr);
+    padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:var(--bg-primary);border-top:1px solid var(--border-secondary);box-shadow:0 -4px 12px rgba(16,24,40,.06)}
+  .bottom-nav button{border:0;background:transparent;color:var(--text-quaternary);border-radius:var(--radius-md);padding:6px 0;display:grid;place-items:center;gap:2px;font-size:22px}
+  .bottom-nav button small{font-size:12px;font-weight:600}
+  .bottom-nav button.active{color:var(--fg-brand);background:var(--bg-brand-section)}
+}
 
-<header class="top">
-  <div class="brand"><div class="logo"><img src="data:image/png;base64,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" alt="FaultPass" style="width:100%;height:100%;object-fit:contain;border-radius:inherit"></div><div><b>FaultPass</b><small>SUBSCRIPTION CENTER</small></div></div>
+@media(max-width:900px){.metrics{grid-template-columns:repeat(2,1fr);gap:16px}.grid-2{grid-template-columns:1fr}}
+@media(max-width:640px){
+  .wrap,.topbar-in{width:calc(100% - 32px)}
+  .topbar-in{height:64px}
+  .brand small,#themeLabel{display:none}
+  .page-head{padding:24px 0 20px;align-items:flex-start}
+  .head-actions{width:100%}.head-actions .btn{flex:1}
+  .who h1{font-size:20px;line-height:30px;max-width:64vw}
+  .avatar{width:56px;height:56px;font-size:20px}
+  .usage{grid-template-columns:1fr;gap:24px}.ring{margin:auto}
+  .metric{padding:16px}.metric b{font-size:24px;line-height:32px}
+  .card-head,.card-body{padding-left:16px;padding-right:16px}
+  .app-row{padding:16px}.expire{padding:16px}
+  .stack{gap:16px;margin-top:16px}.grid-2{gap:16px}
+  .app-row .badge{display:none}
+}
+</style></head><body>
+
+<header class="topbar"><div class="topbar-in">
+  <div class="brand"><div class="logo"><img src="data:image/png;base64,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" alt="FaultPass" style="width:100%;height:100%;object-fit:contain"></div><div><b>FaultPass</b><small>Subscription center</small></div></div>
   <div class="top-actions">
-    <button class="theme-btn" id="themeBtn" type="button" onclick="toggleTheme()" aria-label="تغییر حالت نمایش"><i class="ti ti-sun-moon"></i><span id="themeLabel">روشن</span></button>
-    <div class="live" id="liveBadge"><i class="dot"></i><span id="liveState">سرویس آنلاین</span></div>
+    <span class="badge success live" id="liveBadge"><i class="dot"></i><span id="liveState">سرویس آنلاین</span></span>
+    <button class="btn sm" id="themeBtn" type="button" onclick="toggleTheme()" aria-label="تغییر حالت نمایش"><i class="ti ti-moon"></i><span id="themeLabel">تیره</span></button>
   </div>
-</header>
+</div></header>
 
-<section class="identity">
-  <div class="avatar">__INITIAL__</div>
-  <div>
-    <h1>__LABEL__</h1>
-    <div class="chips">
-      <span class="chip">پروتکل <b>__PROTOCOL__</b></span>
-      <span class="chip" id="statusChip">وضعیت <b id="heroStatus">__STATUS__</b></span>
-      <span class="chip">انقضا <b id="expires">__EXPIRES__</b></span>
+<main class="wrap">
+
+<section class="page-head">
+  <div class="who">
+    <div class="avatar">__INITIAL__</div>
+    <div style="min-width:0">
+      <h1>__LABEL__</h1>
+      <p>وضعیت مصرف، اعتبار و لینک اشتراک شما</p>
+      <div class="chips">
+        <span class="badge brand"><i class="ti ti-shield-lock"></i><b class="ltr">__PROTOCOL__</b></span>
+        <span class="badge __STATUS_CLS__" id="statusChip"><i class="dot"></i><b id="heroStatus">__STATUS__</b></span>
+        <span class="badge"><i class="ti ti-calendar"></i><b id="expires" class="ltr">__EXPIRES__</b></span>
+      </div>
     </div>
   </div>
-  <a class="jump-btn" href="#configs"><i class="ti ti-apps"></i> کانفیگ‌ها</a>
+  <div class="head-actions">
+    <button class="btn primary" onclick="copyLink()"><i class="ti ti-copy"></i> کپی لینک اشتراک</button>
+  </div>
 </section>
 
-<section class="grid">
+<section class="metrics">
+  <div class="metric"><div class="metric-top"><span class="fi"><i class="ti ti-chart-donut"></i></span><span>مصرف شده</span></div><b id="used">__USED__</b></div>
+  <div class="metric"><div class="metric-top"><span class="fi success"><i class="ti ti-database"></i></span><span>باقی‌مانده</span></div><b id="remaining">__REMAINING__</b></div>
+  <div class="metric"><div class="metric-top"><span class="fi"><i class="ti ti-box"></i></span><span>سقف اشتراک</span></div><b id="limit">__LIMIT__</b></div>
+  <div class="metric"><div class="metric-top"><span class="fi"><i class="ti ti-percentage"></i></span><span>درصد مصرف</span></div><b id="summaryPct">__PCT__%</b></div>
+</section>
+
+<div class="stack">
+<section class="grid-2">
   <div class="card">
-    <div class="head"><div><b>مصرف اشتراک</b><small>نمایش مصرف واقعی ثبت‌شده روی سرویس</small></div><span id="updated" style="color:var(--soft);font-size:8px">—</span></div>
-    <div class="body">
+    <div class="card-head"><div><h2>مصرف اشتراک</h2><p>مصرف واقعی ثبت‌شده روی سرویس</p></div><span class="badge"><i class="ti ti-refresh"></i><span id="updated" class="ltr">—</span></span></div>
+    <div class="card-body">
       <div class="usage">
-        <div class="gauge" id="gauge" style="--pct:__PCT__"><div class="gauge-center"><b id="pct">__PCT__%</b><small>مصرف شده</small></div></div>
+        <div class="ring" id="gauge" style="--pct:__PCT__"><div class="ring-c"><small>مصرف شده</small><b id="pct">__PCT__%</b></div></div>
         <div>
-          <div class="metrics">
-            <div class="metric"><small>مصرف شده</small><b class="cyan" id="used">__USED__</b></div>
-            <div class="metric"><small>باقی‌مانده</small><b class="ok" id="remaining">__REMAINING__</b></div>
-            <div class="metric"><small>سقف اشتراک</small><b id="limit">__LIMIT__</b></div>
-            <div class="metric"><small>درصد مصرف</small><b id="summaryPct">__PCT__%</b></div>
+          <div class="kv">
+            <div class="kv-row"><span>پروتکل</span><b>__PROTOCOL__</b></div>
+            <div class="kv-row"><span>محدودیت IP</span><b id="ipLimit">__IP_LIMIT__</b></div>
+            <div class="kv-row"><span>محدودیت اتصال</span><b id="connectionLimit">__CONN_LIMIT__</b></div>
           </div>
-          <div class="meter"><i id="meter"></i></div>
-          <div class="note">عدد مصرف از شمارنده واقعی سرویس خوانده می‌شود؛ با هر بار افزایش ترافیک، مقدار و نمودار به‌روزرسانی می‌شوند.</div>
+          <div class="progress"><div class="bar"><i id="meter" style="width:__PCT__%"></i></div><span id="meterPct">__PCT__%</span></div>
         </div>
       </div>
     </div>
   </div>
 
   <div class="card">
-    <div class="head"><div><b>اتصال‌های فعال</b><small>کاربران آنلاین همین لحظه</small></div><span class="status" id="statusBadge">فعال</span></div>
-    <div class="body">
-      <div class="livebox">
+    <div class="card-head"><div><h2>اتصال‌های فعال</h2><p>دستگاه‌های آنلاین همین لحظه</p></div><span class="badge __STATUS_CLS__" id="statusBadge">__STATUS__</span></div>
+    <div class="card-body">
+      <div class="live-num">
         <div><b id="liveConnections">__ACTIVE_CONN__</b><small>دستگاه / IP یکتا</small></div>
-        <div style="text-align:left"><span class="session" id="sessions">__ACTIVE_SESSIONS__ session</span><br><span class="session" id="connectionLimit">__CONN_LIMIT__</span></div>
+        <span class="fi lg success"><i class="ti ti-devices"></i></span>
       </div>
-      <div class="metric"><small>محدودیت IP</small><b id="ipLimit">__IP_LIMIT__</b></div>
-      <div class="note">برای جلوگیری از نمایش عدد غیرواقعی، یک IP فقط یک کاربر فعال محسوب می‌شود؛ Sessionهای فنی جداگانه نمایش داده می‌شود.</div>
-      <div class="actions">
-        <button class="btn primary" onclick="copyLink()"><i class="ti ti-copy"></i> کپی لینک اشتراک</button>
-        <a class="btn" href="__INFO_URL__"><i class="ti ti-info-circle"></i> اطلاعات سرویس</a>
-      </div>
+      <div class="kv"><div class="kv-row" style="border:0"><span>Session فنی</span><b id="sessions">__ACTIVE_SESSIONS__ session</b></div></div>
+      <div class="alert"><i class="ti ti-info-circle"></i><div>هر IP فقط یک کاربر فعال حساب می‌شود؛ Sessionهای فنی جدا نمایش داده می‌شوند.</div></div>
+      <div class="actions"><a class="btn" href="__INFO_URL__"><i class="ti ti-info-circle"></i> اطلاعات سرویس</a></div>
     </div>
   </div>
 </section>
 
-<section class="card" style="margin-top:14px">
-  <div class="head"><div><b>روند مصرف</b><small>تغییرات ثبت‌شده مصرف اشتراک</small></div><span id="chartState" style="color:var(--soft);font-size:8px">در حال همگام‌سازی</span></div>
-  <div class="body"><div class="chart" id="chart"><svg viewBox="0 0 900 190" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee" stop-opacity=".24"/><stop offset="1" stop-color="#22d3ee" stop-opacity="0"/></linearGradient></defs><g id="gridLines"></g><path id="areaPath" class="area"></path><path id="linePath" class="line"></path><g id="chartPoints"></g><text x="895" y="184" text-anchor="end">زمان</text></svg></div></div>
+<section class="card">
+  <div class="card-head"><div><h2>روند مصرف</h2><p>تغییرات ثبت‌شده مصرف اشتراک</p></div><span class="badge" id="chartState">در حال همگام‌سازی</span></div>
+  <div class="card-body"><div class="chart" id="chart"><svg viewBox="0 0 900 190" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--fg-brand);stop-opacity:.22"/><stop offset="1" style="stop-color:var(--fg-brand);stop-opacity:0"/></linearGradient></defs><g id="gridLines"></g><path id="areaPath" class="area"></path><path id="linePath" class="line"></path><g id="chartPoints"></g></svg></div></div>
 </section>
 
-<section class="card" style="margin-top:14px">
-  <div class="expire-card">
-    <div class="expire-icon"><i class="ti ti-calendar-due"></i></div>
-    <div class="expire-info"><span>انقضای اشتراک</span><strong id="expireStrong">__EXPIRES__</strong></div>
-    <div class="shield-mini"><i class="ti ti-shield-check"></i></div>
+<section class="card">
+  <div class="expire">
+    <span class="fi lg warning"><i class="ti ti-calendar-due"></i></span>
+    <div class="t"><span>انقضای اشتراک</span><strong id="expireStrong">__EXPIRES__</strong></div>
+    <span class="badge __STATUS_CLS__"><i class="ti ti-shield-check"></i>محافظت‌شده</span>
   </div>
 </section>
 
-<section class="card" style="margin-top:14px" id="linkCard">
-  <div class="head"><div><b>لینک اصلی اشتراک</b><small>برای وارد کردن در کلاینت سازگار</small></div>
-    <button class="btn" style="flex:none;padding:8px 12px" onclick="toggleQr()"><i class="ti ti-qrcode"></i> QR</button>
+<section class="card" id="linkCard">
+  <div class="card-head"><div><h2>لینک اصلی اشتراک</h2><p>برای وارد کردن در کلاینت سازگار</p></div>
+    <button class="btn sm" onclick="toggleQr()"><i class="ti ti-qrcode"></i> QR</button>
   </div>
-  <div class="body">
+  <div class="card-body">
     <div class="qr-wrap" id="qrWrap"><img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=__QR__" alt="QR"></div>
-    <div class="url" id="subUrl">__RAW__</div>
+    <label class="field-label">Subscription URL</label>
+    <div class="input-group"><div class="url" id="subUrl">__RAW__</div><button type="button" onclick="copyLink()"><i class="ti ti-copy"></i>Copy</button></div>
+    <div class="hint">این لینک را در بخش Subscription برنامه کلاینت وارد کنید.</div>
     <div class="actions">
       <button class="btn primary" onclick="copyLink()"><i class="ti ti-copy"></i> کپی لینک</button>
       <a class="btn" href="__RAW_URL__" target="_blank" rel="noopener"><i class="ti ti-external-link"></i> باز کردن لینک</a>
@@ -4981,46 +5461,17 @@ body[data-theme="light"] .gauge:before{background:var(--card)}
   </div>
 </section>
 
-<section class="card" style="margin-top:14px" id="configs">
-  <div class="head"><div><b>اتصال سریع</b><small>باز کردن مستقیم در برنامه کلاینت</small></div></div>
-  <div class="body">
-    <div class="apps">
-      <div class="app-row">
-        <div class="app-icon"><i class="ti ti-brand-android"></i></div>
-        <div><div class="app-name">v2rayNG</div><span class="app-tag">اندروید</span></div>
-        <button class="app-go" onclick="quickConnect('v2rayng://install-config?url='+encodeURIComponent(SUB_URL))">اتصال</button>
-      </div>
-      <div class="app-row">
-        <div class="app-icon"><i class="ti ti-shield-bolt"></i></div>
-        <div><div class="app-name">Hiddify</div><span class="app-tag">اندروید / iOS / ویندوز</span></div>
-        <button class="app-go" onclick="quickConnect('hiddify://import/'+encodeURIComponent(SUB_URL))">اتصال</button>
-      </div>
-      <div class="app-row">
-        <div class="app-icon"><i class="ti ti-brand-apple"></i></div>
-        <div><div class="app-name">Streisand</div><span class="app-tag ios">iOS</span></div>
-        <button class="app-go" onclick="quickConnect('streisand://import/'+encodeURIComponent(SUB_URL))">اتصال</button>
-      </div>
-      <div class="app-row">
-        <div class="app-icon"><i class="ti ti-device-laptop"></i></div>
-        <div><div class="app-name">NekoBox</div><span class="app-tag">دسکتاپ</span></div>
-        <button class="app-go" onclick="copyLink()">کپی لینک</button>
-      </div>
-    </div>
-    <div class="note">در صورتی که برنامه به‌صورت خودکار باز نشد، برنامه را نصب کرده و لینک کپی‌شده را به‌صورت دستی وارد کنید.</div>
-  </div>
-</section>
+</div>
 
 <div class="footer">FaultPass · وضعیت و مصرف به‌صورت زنده از سرویس خوانده می‌شود</div>
 </main>
 
 <nav class="bottom-nav">
   <button class="active" onclick="copyLink()"><i class="ti ti-link"></i><small>کپی لینک</small></button>
-  <button onclick="document.getElementById('configs').scrollIntoView({behavior:'smooth'})"><i class="ti ti-apps"></i><small>کانفیگ‌ها</small></button>
   <button onclick="toggleTheme()"><i class="ti ti-sun-moon"></i><small>تم</small></button>
 </nav>
 
 <div class="toast" id="toast">کپی شد ✓</div>
-
 <script>
 const SUB_URL=__RAW_JS__;
 function fmt(n){n=Number(n)||0;if(!n)return'0 B';const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return(n>=100?Math.round(n):n>=10?n.toFixed(1):n.toFixed(2))+' '+u[i]}
@@ -5057,14 +5508,15 @@ function toggleQr(){
 }
 
 function applyTheme(){
-  const t=localStorage.getItem('vw_sub_theme')||'dark';
+  const t=localStorage.getItem('vw_sub_theme')||((window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light');
   document.body.dataset.theme=t;
   const light=t==='light';
   document.getElementById('themeLabel').textContent=light?'تیره':'روشن';
-  document.querySelector('#themeBtn i').className=light?'ti ti-moon':'ti ti-sun-moon';
+  document.querySelector('#themeBtn i').className=light?'ti ti-moon':'ti ti-sun';
+  const m=document.querySelector('meta[name=theme-color]');if(m)m.setAttribute('content',light?'#FFFFFF':'#0C111D');
 }
 function toggleTheme(){
-  const next=(document.body.dataset.theme||'dark')==='dark'?'light':'dark';
+  const next=(document.body.dataset.theme||'light')==='dark'?'light':'dark';
   localStorage.setItem('vw_sub_theme',next);
   applyTheme();
 }
@@ -5073,6 +5525,7 @@ applyTheme();
 function drawChart(history,limit){
   const line=document.getElementById('linePath'),area=document.getElementById('areaPath'),grid=document.getElementById('gridLines'),points=document.getElementById('chartPoints');
   const clean=Array.isArray(history)?history.filter(x=>Number.isFinite(Number(x.used))).slice(-144):[];
+  if(clean.length===1)clean.unshift({ts:'',used:clean[0].used});
   if(clean.length<2){
     line.setAttribute('d','M 0 158 L 900 158');area.setAttribute('d','M 0 158 L 900 158 L 900 170 L 0 170 Z');grid.innerHTML='';points.innerHTML='';document.getElementById('chartState').textContent='در حال جمع‌آوری داده واقعی';return;
   }
@@ -5099,6 +5552,7 @@ async function refresh(){
     document.getElementById('limit').textContent=lim?fmt(lim):'نامحدود';
     document.getElementById('remaining').textContent=lim?fmt(Math.max(0,lim-used)):'نامحدود';
     document.getElementById('meter').style.width=p+'%';
+    document.getElementById('meterPct').textContent=p+'%';
     const active=Number(d.active_connections||0);
     document.getElementById('liveConnections').textContent=active;
     document.getElementById('sessions').textContent=Number(d.active_sessions||0)+' session';
@@ -5110,8 +5564,7 @@ async function refresh(){
     document.getElementById('liveBadge').classList.toggle('off',!d.active);
     document.getElementById('statusBadge').textContent=statusText;
     document.getElementById('statusBadge').classList.toggle('off',!d.active);
-    document.getElementById('statusChip').classList.toggle('status-on',!!d.active);
-    document.getElementById('statusChip').classList.toggle('status-off',!d.active);
+    ['statusChip','statusBadge','liveBadge'].forEach(id=>{const el=document.getElementById(id);el.classList.toggle('success',!!d.active);el.classList.toggle('off',!d.active);});
     const now=new Date().toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     document.getElementById('updated').textContent=now;
     drawChart(d.usage_history,lim);
@@ -5130,6 +5583,7 @@ refresh();setInterval(()=>{if(!document.hidden)refresh()},10000);
       '__IP_LIMIT__':('حداکثر '+str(ip_limit)+' IP') if ip_limit else 'بدون محدودیت','__RAW__':escape_html(raw_url),
       '__RAW_URL__':escape_html(raw_url),'__INFO_URL__':escape_html(info_url),'__QR__':qr,'__UUID__':escape_html(uuid),
       '__RAW_JS__':repr(raw_url),'__INITIAL__':escape_html(initial),
+      '__STATUS_CLS__':'success' if active else 'off',
     }
     for k,v in replacements.items(): html=html.replace(k,v)
     return HTMLResponse(html)
@@ -5146,8 +5600,8 @@ async def subscription_all(
 
         lines = [
             vless_link_for_link(
-                link,
-                uid,
+                {**vlink, "label": f"{vtag} | {vlink.get('label') or 'Config'}" if vtag else vlink.get("label")},
+                vuid,
                 host,
             )
 
@@ -5155,6 +5609,8 @@ async def subscription_all(
             in LINKS.items()
 
             if is_link_allowed(link)
+
+            for vlink, vuid, vtag in expand_outbound_variants(link, uid)
         ]
 
     content = (
@@ -5277,7 +5733,7 @@ function openQr(){document.getElementById('qrModal').style.display='flex'}functi
         "__SUB_JS__": sub_js, "__VLESS_JS__": vless_js,
     }
     for k,v in repl.items(): html = html.replace(k,v)
-    return HTMLResponse(html)
+    return HTMLResponse(_uui(html, "public"))
 
 # ============================================================
 # SUB GROUP API
@@ -5399,7 +5855,13 @@ async def list_subs_api(
                     ) is not None,
 
                 "links_count":
+                    len(link_ids) + len(sub.get("remote_links", [])),
+
+                "local_count":
                     len(link_ids),
+
+                "remote_count":
+                    len(sub.get("remote_links", [])),
 
                 "active_count":
                     active_count,
@@ -5423,6 +5885,10 @@ async def list_subs_api(
                         f"{get_scheme()}://{host}"
                         f"/sub-group/{sub['uuid_key']}"
                     ),
+
+                # جایگزین نسخه‌ی خامِ **sub (که رشته‌ی vless کامل را دارد)
+                "remote_links":
+                    public_remote_links(sub.get("remote_links", [])),
             }
         )
 
@@ -5580,6 +6046,221 @@ async def assign_link_to_sub(
 
 
 # ============================================================
+# NODE LINKS IN A SUBSCRIPTION  ·  دقیقاً مثل «Nodes» در پنل سنایی:
+# یک اینباند در این پنل + یک اینباند روی یک نودِ دیگر، هر دو در یک اشتراک
+# ============================================================
+
+MAX_REMOTE_LINKS_PER_SUB = 200
+
+
+@app.get("/api/nodes/{node_id}/inbounds")
+async def api_node_inbounds(node_id: str, _=Depends(require_owner)):
+    """لیست اینباندهای واقعی (نه کلاینت‌ها) روی یک نود، برای انتخاب و اتصال به یک ساب‌گروه اینجا."""
+    try:
+        from nodes import call_node_json, NodeCallError, get_node
+    except Exception:
+        raise HTTPException(status_code=503, detail="ماژول نودها در دسترس نیست")
+    node = get_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="نود پیدا نشد")
+    try:
+        data = await call_node_json(node_id, "GET", "/api/links")
+    except NodeCallError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    items = [l for l in (data.get("links") or []) if not l.get("is_client")]
+    items.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    return {
+        "ok": True,
+        "node": {"id": node_id, "name": node.get("name", "")},
+        "inbounds": [
+            {
+                "uuid": l.get("uuid"),
+                "label": l.get("label", ""),
+                "protocol_display": l.get("protocol_display", ""),
+                "network": l.get("network", ""),
+                "port": l.get("port"),
+                "active": bool(l.get("active", True)),
+                "outbound": l.get("outbound"),
+                "client_count": l.get("client_count", 0),
+            }
+            for l in items
+        ],
+    }
+
+
+@app.post("/api/subs/{sub_id}/remote-links")
+async def add_remote_links_to_sub(sub_id: str, request: Request, _=Depends(require_owner)):
+    try:
+        from nodes import call_node_json, NodeCallError, get_node
+    except Exception:
+        raise HTTPException(status_code=503, detail="ماژول نودها در دسترس نیست")
+    async with SUBS_LOCK:
+        sub = SUBS.get(sub_id)
+        if not sub:
+            raise HTTPException(status_code=404, detail="گروه ساب پیدا نشد")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON نامعتبر است")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="اطلاعات معتبر نیست")
+    node_id = str(body.get("node_id") or "").strip()
+    uuids = body.get("uuids")
+    if uuids is None:
+        uuids = [body.get("uuid")]
+    if not isinstance(uuids, list) or not uuids:
+        raise HTTPException(status_code=400, detail="حداقل یک اینباند از نود انتخاب کن")
+    node = get_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="نود پیدا نشد")
+
+    async with SUBS_LOCK:
+        entries = sub.setdefault("remote_links", [])
+        existing_keys = {(e["node_id"], e["uuid"]) for e in entries}
+
+    added, failed = [], []
+    for raw_uid in dict.fromkeys(str(u) for u in uuids):
+        if (node_id, raw_uid) in existing_keys:
+            continue
+        if len(existing_keys) + len(added) >= MAX_REMOTE_LINKS_PER_SUB:
+            failed.append({"uuid": raw_uid, "error": f"حداکثر {MAX_REMOTE_LINKS_PER_SUB} عضو ریموت در هر ساب"})
+            continue
+        try:
+            data = await call_node_json(node_id, "GET", f"/api/links/{raw_uid}/info", timeout=10.0)
+        except NodeCallError as exc:
+            failed.append({"uuid": raw_uid, "error": str(exc)})
+            continue
+        entry = {
+            "node_id": node_id,
+            "uuid": raw_uid,
+            "label": str(data.get("label") or ""),
+            "protocol_display": str(data.get("protocol_display") or ""),
+            "vless": str(data.get("vless_full") or data.get("vless") or ""),
+            "vless_variants": [str(x) for x in (data.get("vless_variants") or []) if x],
+            "active": bool(data.get("active", True)),
+            "used_bytes": int(data.get("used_bytes") or 0),
+            "limit_bytes": int(data.get("limit_bytes") or 0),
+            "expires_at": data.get("expires_at"),
+            "added_at": datetime.now().isoformat(),
+            "last_synced_at": datetime.now().isoformat(),
+            "last_error": "",
+        }
+        added.append(entry)
+
+    if added:
+        async with SUBS_LOCK:
+            sub.setdefault("remote_links", []).extend(added)
+        await save_state()
+        log_activity("sub", f"{len(added)} اینباند از نود «{node['name']}» به گروه «{sub.get('name','')}» اضافه شد", "ok")
+
+    return {"ok": True, "added": len(added), "failed": failed, "remote_links": public_remote_links(sub.get("remote_links", []))}
+
+
+@app.delete("/api/subs/{sub_id}/remote-links/{ref_id}")
+async def remove_remote_link_from_sub(sub_id: str, ref_id: str, _=Depends(require_owner)):
+    async with SUBS_LOCK:
+        sub = SUBS.get(sub_id)
+        if not sub:
+            raise HTTPException(status_code=404, detail="گروه ساب پیدا نشد")
+        node_id, _, uid = ref_id.partition(":")
+        before = len(sub.get("remote_links", []))
+        sub["remote_links"] = [e for e in sub.get("remote_links", []) if not (e["node_id"] == node_id and e["uuid"] == uid)]
+        removed = before - len(sub["remote_links"])
+    if removed:
+        await save_state()
+        log_activity("sub", f"یک عضو ریموت از گروه «{sub.get('name','')}» حذف شد", "warn")
+    return {"ok": True, "removed": bool(removed)}
+
+
+@app.post("/api/subs/{sub_id}/remote-links/refresh")
+async def refresh_remote_links_api(sub_id: str, _=Depends(require_owner)):
+    async with SUBS_LOCK:
+        sub = SUBS.get(sub_id)
+        if not sub:
+            raise HTTPException(status_code=404, detail="گروه ساب پیدا نشد")
+    await refresh_remote_links_if_stale(sub, sub_id=sub_id, force=True)
+    return {"ok": True, "remote_links": public_remote_links(sub.get("remote_links", []))}
+
+
+REMOTE_LINK_TTL = 300.0  # ثانیه؛ کش لینک‌های نود تا این مدت بدون تماس با نود سرو می‌شود
+
+
+async def refresh_remote_link_entry(entry: dict) -> dict:
+    """کش یک عضو ریموت (لینک روی یک نود) را با یک تماس به همان نود تازه می‌کند.
+    اگر نود جواب ندهد، آخرین نسخه‌ی کش‌شده دست‌نخورده می‌ماند (فقط last_error ست می‌شود)."""
+    try:
+        from nodes import call_node_json, NodeCallError, get_node
+    except Exception:
+        entry["last_error"] = "ماژول نودها در دسترس نیست"
+        return entry
+    if not get_node(entry["node_id"]):
+        # نود از رجیستری پنل اصلی حذف شده؛ دیگه سعی نمی‌کنیم بهش وصل بشیم و
+        # این عضو رو توی خروجی اشتراک نمی‌ذاریم (تا کانفیگِ یتیم بی‌صدا سرو نشه)
+        entry["node_missing"] = True
+        entry["last_error"] = "این نود از پنل اصلی حذف شده است"
+        return entry
+    entry.pop("node_missing", None)
+    try:
+        data = await call_node_json(entry["node_id"], "GET", f"/api/links/{entry['uuid']}/info", timeout=6.0)
+        entry.update(
+            label=str(data.get("label") or entry.get("label") or ""),
+            protocol_display=str(data.get("protocol_display") or entry.get("protocol_display") or ""),
+            vless=str(data.get("vless_full") or data.get("vless") or ""),
+            vless_variants=[str(x) for x in (data.get("vless_variants") or []) if x],
+            active=bool(data.get("active", True)),
+            used_bytes=int(data.get("used_bytes") or 0),
+            limit_bytes=int(data.get("limit_bytes") or 0),
+            expires_at=data.get("expires_at"),
+            last_synced_at=datetime.now().isoformat(),
+            last_error="",
+        )
+    except NodeCallError as exc:
+        entry["last_error"] = str(exc)[:200]
+    except Exception as exc:
+        entry["last_error"] = f"{type(exc).__name__}: {str(exc)[:150]}"
+    return entry
+
+
+async def mark_node_removed_in_subs(node_id: str):
+    """وقتی یک نود از رجیستری پنل اصلی حذف می‌شه، بلافاصله (نه فقط بعد از TTL کش)
+    عضوهای ریموتی که به همون نود اشاره می‌کنن رو «یتیم» علامت می‌زنیم تا از سرو شدن
+    یک کانفیگ بدون نظارت جلوگیری بشه. صدا زده می‌شه از nodes.py، هنگام حذف نود."""
+    changed = False
+    async with SUBS_LOCK:
+        for sub in SUBS.values():
+            for entry in sub.get("remote_links", []):
+                if entry.get("node_id") == node_id and not entry.get("node_missing"):
+                    entry["node_missing"] = True
+                    entry["last_error"] = "این نود از پنل اصلی حذف شده است"
+                    changed = True
+    if changed:
+        await save_state()
+
+
+async def refresh_remote_links_if_stale(sub: dict, sub_id: str | None = None, force: bool = False) -> list[dict]:
+    entries = sub.get("remote_links", [])
+    if not entries:
+        return []
+    now = time.time()
+
+    def _is_stale(e):
+        ts = e.get("last_synced_at")
+        if not ts:
+            return True
+        try:
+            return (now - datetime.fromisoformat(ts).timestamp()) > REMOTE_LINK_TTL
+        except Exception:
+            return True
+
+    stale = entries if force else [e for e in entries if _is_stale(e)]
+    if stale:
+        await asyncio.gather(*(refresh_remote_link_entry(e) for e in stale), return_exceptions=True)
+        if sub_id:
+            await save_state()
+    return entries
+
+
+# ============================================================
 # GROUP SUB
 # ============================================================
 
@@ -5652,13 +6333,33 @@ async def sub_group_subscription(
                 )
             ):
 
-                lines.append(
-                    vless_link_for_link(
-                        link,
-                        link_id,
-                        host,
+                for vlink, vuid, vtag in expand_outbound_variants(link, link_id):
+                    lines.append(
+                        vless_link_for_link(
+                            {**vlink, "label": f"{vtag} | {vlink.get('label') or 'Config'}"} if vtag else vlink,
+                            vuid,
+                            host,
+                        )
                     )
-                )
+
+    # اعضای «ریموت» = لینک‌هایی که روی یک نود دیگر (پنل FaultPass دیگر، با لوکیشن دیگر)
+    # ساخته شده‌اند و به این ساب‌گروه وصل شده‌اند؛ هر دو داخل یک اشتراک سرو می‌شوند.
+    remote_entries = await refresh_remote_links_if_stale(
+        sub,
+        sub_id=next((k for k, v in SUBS.items() if v is sub), None),
+    )
+    remote_used = 0
+    remote_limit = 0
+    remote_expiries = []
+    for entry in remote_entries:
+        if not entry.get("active", True):
+            continue
+        remote_used += int(entry.get("used_bytes", 0) or 0)
+        remote_limit += int(entry.get("limit_bytes", 0) or 0)
+        if entry.get("expires_at"):
+            remote_expiries.append(str(entry.get("expires_at")))
+        if not entry.get("node_missing") and (entry.get("vless_variants") or entry.get("vless")):
+            lines.extend(entry.get("vless_variants") or [entry["vless"]])
 
     content = (
         base64
@@ -5670,9 +6371,9 @@ async def sub_group_subscription(
         .decode()
     )
 
-    total_used = 0
-    total_limit = 0
-    expiries = []
+    total_used = remote_used
+    total_limit = remote_limit
+    expiries = list(remote_expiries)
     valid_ids = list(sub.get("link_ids", []))
 
     async with LINKS_LOCK:
@@ -5737,6 +6438,7 @@ PUBLIC_SUB_HTML = r"""
 const key=location.pathname.split('/').pop();const qs=location.search||'';function esc(s){return String(s??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]))}function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}async function copy(v){try{await navigator.clipboard.writeText(v);toast('لینک کپی شد ✓')}catch(e){prompt('کپی کنید:',v)}}function fmt(n){if(!n)return'0 B';const u=['B','KB','MB','GB','TB'];let i=0,x=Number(n)||0;while(x>=1024&&i<u.length-1){x/=1024;i++}return(x>=100?Math.round(x):x>=10?x.toFixed(1):x.toFixed(2))+' '+u[i]}function render(d){if(d.locked){document.getElementById('app').innerHTML='<section class="panel locked"><div class="body"><div class="eyebrow">Protected subscription</div><h2>'+esc(d.name||'اشتراک')+'</h2><p style="color:var(--muted);font-size:11px;line-height:2">این اشتراک با رمز محافظت می‌شود. رمز را وارد کنید تا اطلاعات و لینک‌ها نمایش داده شوند.</p><form class="field" onsubmit="event.preventDefault();location.search='?pw='+encodeURIComponent(document.getElementById(\'pw\').value)"><input id="pw" type="password" placeholder="Subscription password"><button class="btn">ورود</button></form></div></section>';return}const links=d.links||[];const qr='https://api.qrserver.com/v1/create-qr-code/?size=220x220&data='+encodeURIComponent(d.sub_url||'');document.getElementById('app').innerHTML='<section class="hero"><div class="eyebrow">Subscription center</div><h1>'+esc(d.name||'Subscription')+'</h1><p>'+esc(d.desc||'مدیریت متمرکز کانفیگ‌ها و لینک اشتراک در یک صفحه حرفه‌ای.')+'</p><div class="stats"><div class="stat"><label>کانفیگ فعال</label><b>'+links.filter(x=>x.active).length+'</b></div><div class="stat"><label>اتصال فعال</label><b>'+Number(d.active_connections||0)+'</b></div><div class="stat"><label>مصرف کل</label><b>'+esc(d.total_used_fmt||'0 B')+'</b></div></div></section><section class="layout"><div class="panel"><div class="head"><div><b>کانفیگ‌های این اشتراک</b><small>وضعیت هر مسیر و مصرف آن</small></div><span style="color:var(--soft);font-size:9px">'+links.length+' مورد</span></div><div class="body">'+(links.length?links.map(l=>'<article class="link"><div class="linktop"><div><div class="linkname">'+esc(l.label||'Config')+'</div><div class="proto">'+esc(l.protocol||'VLESS')+'</div></div><span class="online '+(l.active?'':'offline')+'">'+(l.active?'فعال':'غیرفعال')+'</span></div><div class="linkmeta"><div class="mini"><small>مصرف</small><b>'+esc(l.used_fmt||'0 B')+' / '+esc(l.limit_fmt||'∞')+'</b></div><div class="mini"><small>اتصال</small><b>'+Number(l.connections||0)+' / '+(Number(l.connection_limit||0)||'∞')+'</b></div><div class="mini"><small>انقضا</small><b>'+esc((l.expires_at||'نامحدود').toString().slice(0,16))+'</b></div></div><div class="actions"><button class="btn" onclick="copy('+esc(JSON.stringify(l.sub_url||''))+')">کپی ساب</button><a class="btn alt" href="'+esc(l.info_url||'#')+'">جزئیات</a></div></article>').join(''):'<div style="padding:35px;text-align:center;color:var(--soft);font-size:11px">کانفیگ فعالی برای این اشتراک وجود ندارد.</div>')+'</div></div><aside class="panel"><div class="head"><div><b>لینک اصلی اشتراک</b><small>مناسب برای کلاینت‌های سازگار</small></div></div><div class="body"><div class="qr"><img src="'+qr+'" alt="QR"></div><div class="url">'+esc(d.sub_url||'')+'</div><div class="actions"><button class="btn" onclick="copy('+esc(JSON.stringify(d.sub_url||''))+')">کپی لینک</button><a class="btn alt" href="'+esc(d.sub_url||'#')+'">دریافت</a></div><div class="notice">برای استفاده، لینک بالا را در بخش Subscription کلاینت خود وارد کنید. لینک خام و API بدون تغییر باقی می‌مانند تا سازگاری حفظ شود.</div></div></aside></section>'}async function load(){try{const r=await fetch('/api/public/sub/'+encodeURIComponent(key)+qs,{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.detail||'خطا');render(d)}catch(e){document.getElementById('app').innerHTML='<section class="panel"><div class="body"><h2>اشتراک پیدا نشد</h2><p style="color:var(--muted)">لینک اشتراک منقضی شده، حذف شده یا در دسترس نیست.</p></div></section>'}}load();
 </script></body></html>
 """
+PUBLIC_SUB_HTML = _uui(PUBLIC_SUB_HTML, "public")
 
 
 
@@ -6050,9 +6752,12 @@ async def mix_subscription(request: Request, _=Depends(require_auth)):
             labels.append(str(link.get("label") or lid[:8]))
             total_used += int(link.get("used_bytes", 0) or 0)
             total_limit += int(link.get("limit_bytes", 0) or 0)
-            name = random_config_name(used_names)
-            used_names.add(name)
-            lines.append(vless_link_for_link({**link, "label": name}, lid, host))
+            for vlink, vuid, vtag in expand_outbound_variants(link, lid):
+                name = random_config_name(used_names)
+                used_names.add(name)
+                if vtag:
+                    name = f"{vtag} | {name}"
+                lines.append(vless_link_for_link({**vlink, "label": name}, vuid, host))
     if not lines:
         raise HTTPException(status_code=400, detail="هیچ کانفیگ معتبری انتخاب نشده")
     # stats first line
@@ -6551,6 +7256,47 @@ except Exception as exc:
 
     logger.warning(
         "XHTTP module unavailable: %s",
+        exc,
+    )
+
+
+# ============================================================
+# OUTBOUND PROXY (SOCKS5 / SOCKS4 / HTTP)  +  NODES (multi-location)
+# ============================================================
+try:
+
+    from outbound_proxy import (
+        router as outbound_proxy_router
+    )
+
+    app.include_router(
+        outbound_proxy_router
+    )
+
+    logger.info(
+        "Outbound proxy module loaded."
+    )
+
+except Exception as exc:
+
+    logger.warning(
+        "Outbound proxy module unavailable: %s",
+        exc,
+    )
+
+# نودها: توکن API این پنل + اتصال به پنل‌های دیگر (nodes.py)
+try:
+
+    from nodes import router as nodes_router
+
+    app.include_router(nodes_router)
+
+    logger.info("Nodes module loaded.")
+
+except Exception as exc:
+
+    logger.warning(
+        "Nodes module unavailable: %s",
         exc,
     )
 
@@ -7174,6 +7920,7 @@ async def api_get_settings(request: Request, token=Depends(require_owner)):
         "sub_remark_show_id": bool(CONFIG.get("sub_remark_show_id", False)),
         "sub_remark_show_inbound": bool(CONFIG.get("sub_remark_show_inbound", False)),
         "sales_enabled": sales_enabled_now(),
+        "name_style_enabled": name_style_on(),
     }
 
 
@@ -7210,7 +7957,7 @@ async def api_update_settings(request: Request, token=Depends(require_owner)):
             raise HTTPException(status_code=400, detail="پورت عمومی TCP باید عدد باشد")
         CONFIG["tcp_public_port"] = raw_port
 
-    for flag in ("sub_remark_show_name", "sub_remark_show_volume", "sub_remark_show_id", "sub_remark_show_inbound", "sales_enabled"):
+    for flag in ("sub_remark_show_name", "sub_remark_show_volume", "sub_remark_show_id", "sub_remark_show_inbound", "sales_enabled", "name_style_enabled"):
         if flag in body:
             CONFIG[flag] = bool(body.get(flag))
 

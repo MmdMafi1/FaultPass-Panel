@@ -10,6 +10,8 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from main import (
+    resolve_link_uuid,
+    with_outbound,
     LINKS,
     LINKS_LOCK,
     stats,
@@ -23,6 +25,14 @@ from main import (
 )
 from relay_vless import parse_vless_header, check_and_use
 from speed_limit import throttle
+
+# اتصال به مقصد: اگر کانفیگ پراکسی خروجی داشته باشد از همان رد می‌شود، وگرنه مستقیم.
+# اگر ماژول outbound_proxy در دسترس نباشد، رفتار قبلی (اتصال مستقیم) حفظ می‌شود.
+try:
+    from outbound_proxy import open_target_connection
+except Exception:  # pragma: no cover
+    async def open_target_connection(link, address, port, timeout: float = 10.0):
+        return await asyncio.wait_for(asyncio.open_connection(address, port), timeout=timeout)
 
 router = APIRouter()
 
@@ -185,11 +195,9 @@ def _req_client_ip(request: Request) -> str:
     return request.client.host if request.client else "نامشخص"
 
 
-async def _open_tcp_from_header(first_chunk: bytes):
+async def _open_tcp_from_header(first_chunk: bytes, link: dict | None = None):
     command, address, port, payload = await parse_vless_header(first_chunk)
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(address, port), timeout=TCP_CONNECT_TIMEOUT
-    )
+    reader, writer = await open_target_connection(link, address, port, timeout=TCP_CONNECT_TIMEOUT)
     _tune_socket(writer)
     if payload:
         writer.write(payload)
@@ -321,9 +329,12 @@ async def _pump_tcp_to_queue(session_id: str, uuid: str, reader: asyncio.StreamR
         await _teardown(_skey(uuid, session_id))
 
 
-async def _open_tcp_for_session(session_id: str, uuid: str, sess: dict, first_chunk: bytes):
+async def _open_tcp_for_session(session_id: str, uuid: str, sess: dict, first_chunk: bytes, ob_override=None):
     """تونل TCP رو از روی هدر VLESS باز می‌کنه و پمپ دانلینک رو راه می‌اندازه."""
-    reader, writer, address, port = await _open_tcp_from_header(first_chunk)
+    # خروجی (پراکسی) از روی کانفیگِ همین UUID خوانده می‌شود
+    async with LINKS_LOCK:
+        link = LINKS.get(uuid)
+    reader, writer, address, port = await _open_tcp_from_header(first_chunk, with_outbound(link, ob_override))
     logger.info(f"connect XHTTP[{sess['mode']}] [{session_id[:8]}] -> {address}:{port}")
     sess["writer"] = writer
     sess["tcp_open"] = True
@@ -351,6 +362,7 @@ def _downstream_gen(sess: dict):
 @router.get("/xhttp-siz10/{mode}/{uuid}/{session_id}")
 async def xhttp_downlink(mode: str, uuid: str, session_id: str, request: Request):
     ensure_reaper()
+    uuid, ob_override = resolve_link_uuid(uuid)  # چندخروجی
     if mode not in ("packet-up", "stream-up"):
         raise HTTPException(status_code=404, detail="unknown mode")
     await _check_link(uuid)
@@ -367,6 +379,7 @@ async def xhttp_downlink(mode: str, uuid: str, session_id: str, request: Request
 @router.post("/xhttp-siz10/packet-up/{uuid}/{session_id}/{seq}")
 async def packet_up_upload(uuid: str, session_id: str, seq: int, request: Request):
     ensure_reaper()
+    uuid, ob_override = resolve_link_uuid(uuid)  # چندخروجی
     sess = await _get_or_create_session(uuid, "packet-up", session_id, _req_client_ip(request))
     if sess.get("closed"):
         raise HTTPException(status_code=404, detail="session closed")
@@ -399,7 +412,7 @@ async def packet_up_upload(uuid: str, session_id: str, seq: int, request: Reques
                     raise HTTPException(status_code=408, detail="out-of-order buffer overflow")
                 sess["seq_buf"][seq] = body
                 return {"ok": True, "buffered": True}
-            await _open_tcp_for_session(session_id, uuid, sess, body)
+            await _open_tcp_for_session(session_id, uuid, sess, body, ob_override)
             # هر پکت بافرشده‌ای که حالا نوبتش رسیده رو هم بفرست
             nxt = 1
             while nxt in sess["seq_buf"]:
@@ -441,6 +454,7 @@ async def packet_up_upload(uuid: str, session_id: str, seq: int, request: Reques
 @router.post("/xhttp-siz10/stream-up/{uuid}/{session_id}")
 async def stream_up_upload(uuid: str, session_id: str, request: Request):
     ensure_reaper()
+    uuid, ob_override = resolve_link_uuid(uuid)  # چندخروجی
     sess = await _get_or_create_session(uuid, "stream-up", session_id, _req_client_ip(request))
     if sess.get("closed"):
         raise HTTPException(status_code=404, detail="session closed")
@@ -473,7 +487,7 @@ async def stream_up_upload(uuid: str, session_id: str, request: Request):
                 conn["bytes"] += len(chunk)
 
             if writer is None:
-                await _open_tcp_for_session(session_id, uuid, sess, chunk)
+                await _open_tcp_for_session(session_id, uuid, sess, chunk, ob_override)
                 writer = sess["writer"]
                 continue
 
